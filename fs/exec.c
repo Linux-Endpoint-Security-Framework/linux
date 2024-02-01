@@ -76,6 +76,10 @@
 
 #include <trace/events/sched.h>
 
+#ifdef CONFIG_SECURITY_ESF
+#include <linux/esf.h>
+#endif
+
 static int bprm_creds_from_file(struct linux_binprm *bprm);
 
 int suid_dumpable = 0;
@@ -1371,6 +1375,12 @@ int begin_new_exec(struct linux_binprm * bprm)
 	retval = set_cred_ucounts(bprm->cred);
 	if (retval < 0)
 		goto out_unlock;
+
+#if defined(CONFIG_SECURITY_ESF)
+	retval = esf_on_execve(me, bprm);
+	if (retval)
+		goto out_unlock;
+#endif
 
 	/*
 	 * install the new credentials for this executable

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config SECURITY_ESF
+	bool "Endpoint security framework for userspace application"
+	depends on SECURITY
+	help
+	  Allow to userspace applications to control system and
+	  collect events on the kernel level
+
+config SECURITY_ESF_CHECK_SIGNATURE
+	bool "Enable security agents signature verification"
+	depends on SECURITY_ESF
+	help
+	  If selected, ESF will check signature for security agents before load. Can be controlled via boot cli
+
+config SECURITY_ESF_MAX_AGENTS
+	int "Maximum agents amount can be registered simultaneously"
+	default 1
+	depends on SECURITY_ESF
+	help
+	  For allow multiple security agents increase this value (at you own risk). Also can be controlled via bool cli
