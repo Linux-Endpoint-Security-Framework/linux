@@ -18,8 +18,14 @@
 
 #include "defs.h"
 
+typedef enum esf_agent_ctl_subscribe_flags {
+	ESF_SUBSCRIBE_NONE = 0,
+	ESF_SUBSCRIBE_AS_CONTROLLER = 1 << 0
+} esf_agent_ctl_subscribe_flags_t;
+
 typedef struct esf_agent_ctl_subscribe {
 	esf_event_type_t event_type;
+	esf_agent_ctl_subscribe_flags_t flags;
 } esf_agent_ctl_subscribe_t;
 
 typedef struct esf_agent_ctl_activate {

@@ -3,6 +3,7 @@
 #include <linux/lsm_hooks.h>
 #include <linux/netlink.h>
 #include <linux/miscdevice.h>
+#include <linux/hashtable.h>
 
 #include <uapi/linux/esf/defs.h>
 #include <uapi/linux/esf/ctl.h>
@@ -13,7 +14,7 @@
 #include "hooks.h"
 
 static bool verify_sig = IS_ENABLED(CONFIG_SECURITY_CHECK_SIGNATURE);
-module_param(verify_sig, bool, true);
+module_param(verify_sig, bool, 0600);
 MODULE_PARM_DESC(verify_sig, "Enable agent signature verification");
 
 static int max_agents = CONFIG_SECURITY_ESF_MAX_AGENTS;
@@ -159,40 +160,92 @@ uint32_t esf_get_agents_count(void)
 	return agent_count;
 }
 
-int esf_submit_raw_event(esf_raw_event_t *raw_event, gfp_t gfp)
+int esf_submit_raw_event_ex(esf_raw_event_t *raw_event, gfp_t gfp,
+			    esf_submit_flags_t flags)
 {
-	ulong irq_flags;
 	esf_agent_t *agent = NULL;
+	int agents_want_control = 0;
+	esf_action_decision_t decision = ESF_ACTION_DECISION_ALLOW;
 
 	BUG_ON(!raw_event);
 
 	esf_raw_event_get(raw_event);
 
-	read_lock_irqsave(&_context.agents_lock, irq_flags);
+	int receivers_num = 0;
+	esf_agent_t *receiver_agents[CONFIG_SECURITY_ESF_MAX_AGENTS];
+	memset(receiver_agents, 0, sizeof(receiver_agents));
+
+	read_lock(&_context.agents_lock);
 
 	list_for_each_entry(agent, &_context.agents, _node) {
 		esf_agent_get(agent);
 
+		// agent is not active, do not send event to this one
 		if (!(agent->flags & ESF_AGENT_ACTIVE)) {
 			goto put_agent;
 		}
 
+		// agent is not subscribed to this event type, do not send event to this one
 		if (!esf_agent_is_subscribed_to(agent,
 						raw_event->event.header.type)) {
 			goto put_agent;
 		}
 
-		esf_agent_enqueue_event(agent, raw_event, gfp);
+		// agent active and subscribed to this event type, write to broadcast
+		// table ref up (will be putted after sending event)
+		receiver_agents[receivers_num] = agent;
+		receivers_num++;
+		esf_agent_get(agent);
+
+		// if this event can be controlled by this agent and agent
+		// also wants to control this event increment want control counter
+		if ((raw_event->event.header.flags & ESF_EVENT_CAN_CONTROL) &&
+		    esf_agent_want_control(agent,
+					   raw_event->event.header.type)) {
+			agents_want_control++;
+		}
 
 put_agent:
 		esf_agent_put(agent);
 	}
 
-	read_unlock_irqrestore(&_context.agents_lock, irq_flags);
+	read_unlock(&_context.agents_lock);
+
+	// broadcast event to all agents want to receive this one
+	for (int i = 0; i < receivers_num; i++) {
+		esf_agent_t *receiver_agent = receiver_agents[i];
+		esf_agent_enqueue_event(receiver_agent, raw_event, gfp);
+		esf_agent_put(receiver_agent);
+	}
+
+	if (agents_want_control == 0) {
+		esf_log_debug("Nobody want control " RAW_EVENT_FMT_STR,
+			      RAW_EVENT_FMT(raw_event));
+	}
+
+	// if any at least one agent want to control this event, we should
+	// wait for decision from all agents
+	if (agents_want_control > 0 && (flags & ESF_SUBMIT_WAIT_FOR_DECISION)) {
+		esf_log_debug("%d agents want control " RAW_EVENT_FMT_STR,
+			      agents_want_control, RAW_EVENT_FMT(raw_event));
+
+		// add this event to wait table with calculated
+		// amount of agents which will make decision
+		esf_raw_event_add_to_decision_wait_table(raw_event,
+							 agents_want_control);
+
+		// and finally wait for decision
+		decision = esf_raw_event_wait_for_decision(raw_event);
+	}
 
 	esf_raw_event_put(raw_event);
 
-	return 0;
+	return decision == ESF_ACTION_DECISION_ALLOW ? 0 : -EPERM;
+}
+
+int esf_submit_raw_event(esf_raw_event_t *raw_event, gfp_t gfp)
+{
+	return esf_submit_raw_event_ex(raw_event, gfp, ESF_SUBMIT_SIMPLE);
 }
 
 static long _esf_signature_verify(struct task_struct *agent_task,

@@ -30,6 +30,7 @@ typedef struct esf_agent {
 	int fd;
 	esf_agent_flags_t flags;
 	esf_agent_subscriptions_mask subscriptions;
+	esf_agent_subscriptions_mask want_control_subscriptions;
 
 	wait_queue_head_t events_queue_wq;
 	rwlock_t event_queue_lock;
@@ -38,6 +39,9 @@ typedef struct esf_agent {
 } __randomize_layout esf_agent_t;
 
 esf_agent_t* esf_agent_create(struct task_struct *security_agent_task, gfp_t gfp);
+
+bool esf_agent_want_control(const esf_agent_t *agent,
+			    esf_event_type_t event_type);
 
 bool esf_agent_is_subscribed_to(const esf_agent_t* agent, esf_event_type_t event_type);
 

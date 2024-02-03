@@ -102,6 +102,10 @@ _do_agent_subscribe_ioctl(esf_agent_t *agent,
 
 	agent->subscriptions[category] |= event_mask;
 
+	if (subscribe_cmd->flags & ESF_SUBSCRIBE_AS_CONTROLLER) {
+		agent->want_control_subscriptions[category] |= event_mask;
+	}
+
 	return 0;
 }
 
@@ -201,7 +205,8 @@ _send_event_to_user(char *buffer, size_t buffer_size,
 	uint64_t total_copied = 0;
 
 	// serialize all items
-	list_for_each_entry(raw_item, &event_holder->raw_event->raw_items, _node) {
+	list_for_each_entry(raw_item, &event_holder->raw_event->raw_items,
+			    _node) {
 		BUG_ON(!raw_item);
 
 		esf_raw_item_get(raw_item);
@@ -384,6 +389,16 @@ int esf_agent_enqueue_event(esf_agent_t *agent, esf_raw_event_t *raw_event,
 	wake_up_interruptible(&agent->events_queue_wq);
 
 	return 0;
+}
+
+bool esf_agent_want_control(const esf_agent_t *agent,
+			    esf_event_type_t event_type)
+{
+	esf_event_category_t category = ESF_EVENT_CATEGORY_NR(event_type);
+	uint64_t event_mask = ESF_EVENT_TYPE_MASK(event_type);
+
+	BUG_ON(category >= _ESF_EVENT_CATEGORY_MAX);
+	return (agent->want_control_subscriptions[category] & event_mask);
 }
 
 bool esf_agent_is_subscribed_to(const esf_agent_t *agent,

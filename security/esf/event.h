@@ -12,14 +12,28 @@ typedef struct esf_raw_event_item {
 	atomic_t refs;
 	esf_item_t *__owned item;
 	void *data;
-} esf_raw_item_t;
+} __randomize_layout esf_raw_item_t;
 
 typedef struct esf_raw_event {
+	// control table data
+	struct hlist_node _hnode;
+	atomic_t decisions_left;
+	struct completion decisions_completion;
+	esf_action_decision_t decision;
+
 	struct list_head raw_items; // list of esf_raw_event_item_t
 	atomic_t refs;
 	size_t items_data_size;
 	esf_event_t event;
-} esf_raw_event_t;
+} __randomize_layout esf_raw_event_t;
+
+#define RAW_EVENT_FMT_STR \
+	"event[0x%llx]: { id:%lld, type: %d, decision: %d, decisions_left: %d }"
+
+#define RAW_EVENT_FMT(raw_event)                                       \
+	(uint64_t)(raw_event), (raw_event)->event.header.id,           \
+		(raw_event)->event.header.type, (raw_event)->decision, \
+		atomic_read(&(raw_event)->decisions_left)
 
 esf_raw_item_t *esf_raw_item_get(esf_raw_item_t *raw_item);
 
@@ -51,5 +65,16 @@ int esf_raw_event_add_item_type(esf_raw_event_t *raw_event,
 				esf_item_t *__owned item,
 				esf_item_type_t item_type, void *data,
 				size_t data_size, gfp_t gfp);
+
+int esf_event_id_make_decision(esf_event_id event_id,
+			       esf_action_decision_t decision);
+
+void esf_raw_event_add_to_decision_wait_table(esf_raw_event_t *raw_event,
+					      int waiters_count);
+
+void esf_raw_event_remove_to_decision_wait_table(esf_raw_event_t *raw_event);
+
+esf_action_decision_t
+esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event);
 
 #endif /* __LINUX_ESF_EVENT_H */

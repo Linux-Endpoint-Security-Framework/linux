@@ -190,6 +190,7 @@ out:
 int esf_on_execve(struct task_struct *task, struct linux_binprm *bprm)
 {
 	ulong task_stack = 0;
+	int ret = 0;
 
 	if (!esf_anyone_subscribed_to(ESF_EVENT_TYPE_PROCESS_EXECUTION)) {
 		return 0;
@@ -221,11 +222,11 @@ int esf_on_execve(struct task_struct *task, struct linux_binprm *bprm)
 				     &raw_event->event.header.process,
 				     &fill_task_info, GFP_KERNEL);
 
-	esf_submit_raw_event(raw_event, GFP_KERNEL);
+	ret = esf_submit_raw_event(raw_event, GFP_KERNEL);
 
 	esf_raw_event_put(raw_event);
 
-	return 0;
+	return ret;
 }
 
 static struct security_hook_list _esf_hooks[] __ro_after_init = {};

@@ -1,5 +1,6 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/hashtable.h>
 
 #include "event.h"
 #include "log.h"
@@ -99,6 +100,8 @@ void _esf_raw_event_free(esf_raw_event_t *esf_event)
 	kfree(esf_event);
 }
 
+static atomic64_t _raw_event_id = ATOMIC64_INIT(0);
+
 esf_raw_event_t *esf_raw_event_create(esf_event_type_t type,
 				      esf_event_flags_t flags, gfp_t gfp)
 {
@@ -112,7 +115,12 @@ esf_raw_event_t *esf_raw_event_create(esf_event_type_t type,
 	raw_event->event.header.timestamp = ktime_to_ms(ktime_get());
 	raw_event->event.header.type = type;
 	raw_event->event.header.flags = flags;
+	raw_event->event.header.id = atomic64_inc_return(&_raw_event_id);
 
+	INIT_HLIST_NODE(&raw_event->_hnode);
+	raw_event->decision = ESF_ACTION_DECISION_ALLOW;
+	init_completion(&raw_event->decisions_completion);
+	atomic_set(&raw_event->decisions_left, 0);
 	INIT_LIST_HEAD(&raw_event->raw_items);
 	atomic_set(&raw_event->refs, 0);
 
@@ -223,4 +231,97 @@ void esf_raw_event_put(esf_raw_event_t *raw_event)
 	if (atomic_dec_and_test(&raw_event->refs)) {
 		_esf_raw_event_destroy(raw_event);
 	}
+}
+
+static DEFINE_MUTEX(_wait_decision_tbl_mtx);
+static DECLARE_HASHTABLE(_wait_decision_tbl, 12);
+
+int esf_event_id_make_decision(esf_event_id event_id,
+			       esf_action_decision_t decision)
+{
+	esf_raw_event_t *raw_event = NULL;
+
+	mutex_lock(&_wait_decision_tbl_mtx);
+
+	hash_for_each_possible(_wait_decision_tbl, raw_event, _hnode,
+			       event_id) {
+		// if not denied, write new decision
+		if (raw_event->decision != ESF_ACTION_DECISION_DENY) {
+			raw_event->decision = decision;
+		}
+
+		if (atomic_dec_and_test(&raw_event->decisions_left)) {
+			complete_all(&raw_event->decisions_completion);
+		}
+	}
+
+	mutex_unlock(&_wait_decision_tbl_mtx);
+
+	return 0;
+}
+
+void esf_raw_event_add_to_decision_wait_table(esf_raw_event_t *raw_event,
+					      int waiters_count)
+{
+	BUG_ON(waiters_count <= 0);
+
+	esf_raw_event_get(raw_event);
+	atomic_set(&raw_event->decisions_left, waiters_count);
+
+	mutex_lock(&_wait_decision_tbl_mtx);
+	hash_add(_wait_decision_tbl, &raw_event->_hnode,
+		 raw_event->event.header.id);
+	mutex_unlock(&_wait_decision_tbl_mtx);
+}
+
+void esf_raw_event_remove_to_decision_wait_table(esf_raw_event_t *raw_event)
+{
+	atomic_set(&raw_event->decisions_left, 0);
+	complete_all(&raw_event->decisions_completion);
+
+	mutex_lock(&_wait_decision_tbl_mtx);
+	hash_del(&raw_event->_hnode);
+	mutex_unlock(&_wait_decision_tbl_mtx);
+
+	esf_raw_event_put(raw_event);
+}
+
+/*!
+ * esf_raw_event_wait_for_decision() waits for event decision
+ * and removes raw_event from wait table
+ * @raw_event : event to wait
+ * @return a decision has made
+ */
+esf_action_decision_t
+esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event)
+{
+	esf_action_decision_t final_decision = ESF_ACTION_DECISION_ALLOW;
+
+	esf_raw_event_get(raw_event);
+
+	if (!hash_hashed(&raw_event->_hnode)) {
+		esf_log_err(
+			"Attempt to wait for decision on non-hashed " RAW_EVENT_FMT_STR,
+			RAW_EVENT_FMT(raw_event));
+
+		goto out;
+	}
+
+	if (!wait_for_completion_timeout(&raw_event->decisions_completion,
+					 msecs_to_jiffies(500))) {
+		esf_log_debug_err("Waiting for " RAW_EVENT_FMT_STR
+				  " decision timed out",
+				  RAW_EVENT_FMT(raw_event));
+	}
+
+	final_decision = raw_event->decision;
+	esf_raw_event_remove_to_decision_wait_table(raw_event);
+
+	esf_log_debug_err(RAW_EVENT_FMT_STR " decision: %d",
+			  RAW_EVENT_FMT(raw_event), final_decision);
+
+out:
+	esf_raw_event_put(raw_event);
+
+	return final_decision;
 }

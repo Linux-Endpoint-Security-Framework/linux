@@ -92,10 +92,11 @@ int esf_register_agent(int esf_fd) {
     return agent_fd;
 }
 
-int esf_agent_subscribe(int agent_fd, esf_event_type_t event_type) {
+int esf_agent_subscribe(int agent_fd, esf_event_type_t event_type, esf_agent_ctl_subscribe_flags_t flags) {
     esf_agent_log("subscribing to event type %d...", event_type);
     esf_agent_ctl_subscribe_t subscribe_cmd = {
             .event_type = event_type,
+            .flags = flags,
     };
 
     return ioctl(agent_fd, ESF_AGENT_CTL_SUBSCRIBE, &subscribe_cmd);
@@ -180,7 +181,7 @@ int main(int argc, char **argv) {
         goto out;
     }
 
-    error = esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION);
+    error = esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION, ESF_SUBSCRIBE_AS_CONTROLLER);
 
     if (error) {
         esf_agent_err("esf_agent_subscribe");

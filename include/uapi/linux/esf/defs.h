@@ -22,6 +22,12 @@
 #define ESF_VERSION ESV_V1
 
 typedef int esf_version;
+typedef __u64 esf_event_id;
+
+typedef enum esf_action_decision {
+	ESF_ACTION_DECISION_ALLOW = 0,
+	ESF_ACTION_DECISION_DENY = 1
+} esf_action_decision_t;
 
 typedef enum esf_transport {
 	ESF_TRANSPORT_EPOLL = 1 << 0,
@@ -183,6 +189,7 @@ typedef struct esf_process_info {
 } esf_process_info_t;
 
 typedef struct esf_event_header {
+	esf_event_id id;
 	esf_event_type_t type;
 	esf_version version;
 	esf_event_flags_t flags;
