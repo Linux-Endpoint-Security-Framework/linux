@@ -77,7 +77,10 @@ _do_agent_activate_ioctl(esf_agent_t *agent,
 
 	for (int i = 0; i < _ESF_EVENT_CATEGORY_MAX; ++i) {
 		esf_print_bitmask_64(agent->subscriptions[i], mask_buff);
-		esf_log_debug("\tmask %d: %s", i, mask_buff);
+		esf_log_debug("\tsub mask %d: %s", i, mask_buff);
+		esf_print_bitmask_64(agent->want_control_subscriptions[i],
+				     mask_buff);
+		esf_log_debug("\tctl mask %d: %s", i, mask_buff);
 	}
 
 	agent->flags |= ESF_AGENT_ACTIVE;
@@ -107,6 +110,13 @@ _do_agent_subscribe_ioctl(esf_agent_t *agent,
 	}
 
 	return 0;
+}
+
+static long _do_agent_decide_ioctl(__maybe_unused esf_agent_t *agent,
+				   const esf_agent_ctl_decide_t *decide_cmd)
+{
+	return esf_event_id_make_decision(decide_cmd->event_id,
+					  decide_cmd->decision);
 }
 
 static long _agent_fd_ioctl(struct file *filp, unsigned int cmd,
@@ -140,6 +150,16 @@ static long _agent_fd_ioctl(struct file *filp, unsigned int cmd,
 		}
 
 		res = _do_agent_subscribe_ioctl(agent, &subscribe_cmd);
+	} break;
+	case ESF_AGENT_CTL_DECIDE: {
+		esf_agent_ctl_decide_t decide_cmd;
+		if (copy_from_user(&decide_cmd, (const void *)arg,
+				   sizeof(decide_cmd)) > 0) {
+			res = -EFAULT;
+			goto out;
+		}
+
+		res = _do_agent_decide_ioctl(agent, &decide_cmd);
 	} break;
 	default:
 		res = -ENOIOCTLCMD;

@@ -31,8 +31,14 @@ typedef struct esf_agent_ctl_subscribe {
 typedef struct esf_agent_ctl_activate {
 } esf_agent_ctl_activate_t;
 
+typedef struct esf_agent_ctl_decide {
+	esf_event_id event_id;
+	esf_action_decision_t decision;
+} esf_agent_ctl_decide_t;
+
 #define ESF_AGENT_CTL_SUBSCRIBE _IOR('a', 0x0, esf_agent_ctl_subscribe_t)
 #define ESF_AGENT_CTL_ACTIVATE _IOR('a', 0x5, esf_agent_ctl_activate_t)
+#define ESF_AGENT_CTL_DECIDE _IOR('a', 0x10, esf_agent_ctl_decide_t)
 
 typedef struct esf_ctl_get_subsystem_info {
 	esf_version api_version;

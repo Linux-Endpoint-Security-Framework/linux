@@ -1376,12 +1376,6 @@ int begin_new_exec(struct linux_binprm * bprm)
 	if (retval < 0)
 		goto out_unlock;
 
-#if defined(CONFIG_SECURITY_ESF)
-	retval = esf_on_execve(me, bprm);
-	if (retval)
-		goto out_unlock;
-#endif
-
 	/*
 	 * install the new credentials for this executable
 	 */

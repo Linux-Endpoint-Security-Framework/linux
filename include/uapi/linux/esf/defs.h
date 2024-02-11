@@ -197,8 +197,16 @@ typedef struct esf_event_header {
 	__kernel_time64_t timestamp;
 } esf_event_header_t;
 
+typedef struct esf_process_execution {
+	esf_item_t interpreter;
+} esf_process_execution_t;
+
 typedef struct esf_event {
 	esf_event_header_t header;
+
+	union {
+		esf_process_execution_t process_execution;
+	};
 
 	__u64 data_size;
 	char data[];

@@ -39,13 +39,17 @@ esf_raw_item_t *_esf_raw_item_create(esf_item_t *__owned item, void *data,
 				     _copy_func_t copy_func)
 {
 	esf_raw_item_t *raw_item = _esf_raw_item_alloc(gfp);
+	size_t item_size = data_size;
 
 	if (!raw_item) {
 		return NULL;
 	}
 
 	if (copy_func) {
-		raw_item->data = kmalloc(data_size, gfp);
+		// with zero at end
+		item_size += 1;
+
+		raw_item->data = kmalloc(item_size, gfp);
 
 		if (!raw_item->data) {
 			_efs_raw_item_free(raw_item);
@@ -56,13 +60,17 @@ esf_raw_item_t *_esf_raw_item_create(esf_item_t *__owned item, void *data,
 			_efs_raw_item_free(raw_item);
 			return NULL;
 		}
+
+		((char*)raw_item->data)[item_size] = '\0';
 	} else {
+		// memory will be just moved, so keep data size as passed to func
 		raw_item->data = data;
 	}
 
 	atomic_set(&raw_item->refs, 0);
 	INIT_LIST_HEAD(&raw_item->_node);
 	raw_item->item = item;
+	raw_item->item->size = item_size;
 
 	esf_log_debug("Created raw item 0x%llx, size: %zu", (uint64_t)raw_item,
 		      data_size);
@@ -176,14 +184,13 @@ int esf_raw_event_add_item_ex(esf_raw_event_t *raw_event, esf_item_t *item,
 
 	list_add(&raw_item->_node, &raw_event->raw_items);
 	raw_item->item->item_type = item_type;
-	raw_item->item->size = data_size;
 	raw_item->item->offset = raw_event->items_data_size;
 
 	esf_log_debug("Added raw item at 0x%llx, size: %u, offset: %llu",
 		      (uint64_t)raw_event, raw_item->item->size,
 		      raw_item->item->offset);
 
-	raw_event->items_data_size += data_size;
+	raw_event->items_data_size += raw_item->item->size;
 	raw_event->event.data_size = raw_event->items_data_size;
 
 	return 0;
@@ -240,11 +247,27 @@ int esf_event_id_make_decision(esf_event_id event_id,
 			       esf_action_decision_t decision)
 {
 	esf_raw_event_t *raw_event = NULL;
+	bool found = false;
 
 	mutex_lock(&_wait_decision_tbl_mtx);
 
 	hash_for_each_possible(_wait_decision_tbl, raw_event, _hnode,
 			       event_id) {
+		esf_log_debug(RAW_EVENT_FMT_STR " - %s by agent %d",
+			      RAW_EVENT_FMT(raw_event),
+			      decision == ESF_ACTION_DECISION_ALLOW ?
+				      "allowed" :
+				      "denied",
+			      current->pid);
+
+		found = true;
+
+		if (decision == ESF_ACTION_DECISION_DENY) {
+			esf_log_warn("Action %d denied by security agent %d",
+				     raw_event->event.header.type,
+				     current->pid);
+		}
+
 		// if not denied, write new decision
 		if (raw_event->decision != ESF_ACTION_DECISION_DENY) {
 			raw_event->decision = decision;
@@ -257,7 +280,7 @@ int esf_event_id_make_decision(esf_event_id event_id,
 
 	mutex_unlock(&_wait_decision_tbl_mtx);
 
-	return 0;
+	return found ? 0 : -ENOENT;
 }
 
 void esf_raw_event_add_to_decision_wait_table(esf_raw_event_t *raw_event,
@@ -286,6 +309,8 @@ void esf_raw_event_remove_to_decision_wait_table(esf_raw_event_t *raw_event)
 	esf_raw_event_put(raw_event);
 }
 
+#define _ESF_EVENT_DECISION_TIMEOUT_MS 500
+
 /*!
  * esf_raw_event_wait_for_decision() waits for event decision
  * and removes raw_event from wait table
@@ -307,18 +332,25 @@ esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event)
 		goto out;
 	}
 
-	if (!wait_for_completion_timeout(&raw_event->decisions_completion,
-					 msecs_to_jiffies(500))) {
+	uint64_t timeout = msecs_to_jiffies(_ESF_EVENT_DECISION_TIMEOUT_MS);
+	uint64_t till_timeout = wait_for_completion_timeout(
+		&raw_event->decisions_completion, timeout);
+
+	if (till_timeout == 0) {
 		esf_log_debug_err("Waiting for " RAW_EVENT_FMT_STR
 				  " decision timed out",
 				  RAW_EVENT_FMT(raw_event));
+	} else {
+		esf_log_debug(
+			"Decision for " RAW_EVENT_FMT_STR ": %s made in %d ms",
+			RAW_EVENT_FMT(raw_event),
+			final_decision == ESF_ACTION_DECISION_ALLOW ? "allow" :
+								      "deny",
+			jiffies_to_msecs(timeout - till_timeout));
 	}
 
 	final_decision = raw_event->decision;
 	esf_raw_event_remove_to_decision_wait_table(raw_event);
-
-	esf_log_debug_err(RAW_EVENT_FMT_STR " decision: %d",
-			  RAW_EVENT_FMT(raw_event), final_decision);
 
 out:
 	esf_raw_event_put(raw_event);

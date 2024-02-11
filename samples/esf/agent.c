@@ -22,6 +22,7 @@ static uint16_t _win_width = 80;
 #define _null_str "(null)"
 
 #define esf_item_as_string(event_ptr, item_field) esf_event_item_copy((event_ptr), &((event_ptr)->item_field))
+#define esf_item_as_ref(event_ptr, item_field) esf_event_item_data((event_ptr), &((event_ptr)->item_field))
 
 #define esf_agent_err(fmt, ...) fprintf(stderr, "[sample]: "fmt": %s\n", ##__VA_ARGS__, strerror(errno))
 #define esf_agent_log(fmt, ...) fprintf(stdout, "[sample]: "fmt"\n", ##__VA_ARGS__)
@@ -108,6 +109,15 @@ int esf_agent_activate(int agent_fd) {
     return ioctl(agent_fd, ESF_AGENT_CTL_ACTIVATE, &activate_cmd);
 }
 
+int esf_event_make_decision(int agent_fd, const esf_event_t *event, esf_action_decision_t decision) {
+    esf_agent_ctl_decide_t decide_cmd = {
+            .event_id = event->header.id,
+            .decision = decision,
+    };
+    esf_agent_log("%s event %llu", decision == ESF_ACTION_DECISION_ALLOW ? "allow" : "deny", event->header.id);
+    return ioctl(agent_fd, ESF_AGENT_CTL_DECIDE, &decide_cmd);
+}
+
 const void *esf_event_item_data(const esf_event_t *event, const esf_item_t *item) {
     return event->data + item->offset;
 }
@@ -133,6 +143,19 @@ void *esf_event_item_copy(const esf_event_t *event, const esf_item_t *item) {
     return dup;
 }
 
+const char *_basename(char const *path) {
+    char *s = strrchr(path, '/');
+    if (s == NULL) {
+        return path;
+    } else {
+        return s + 1;
+    }
+}
+
+bool _is_program(const char *p, const char *e) {
+    const char* base = _basename(p);
+    return strcmp(base, e) == 0;
+}
 
 int main(int argc, char **argv) {
     int epoll_fd = 0, esf_fd = 0, agent_fd = 0;
@@ -222,18 +245,32 @@ int main(int argc, char **argv) {
             esf_agent_log("accepted %ld events", events_count);
 
             for_each_esf_event(esf_events_buff, events_count, it) {
-
                 const esf_event_t *event = esf_event_iterator_get_event(it);
-
                 char *exe = esf_item_as_string(event, header.process.exe);
+
+                if (event->header.flags & ESF_EVENT_CAN_CONTROL) {
+                    if (_is_program(exe, "python")) {
+                        esf_event_make_decision(agent_fd, event, ESF_ACTION_DECISION_DENY);
+                    } else {
+                        esf_event_make_decision(agent_fd, event, ESF_ACTION_DECISION_ALLOW);
+                    }
+                }
                 char *args = esf_item_as_string(event, header.process.args);
                 char *env = esf_item_as_string(event, header.process.env);
 
                 esf_agent_log("event %d (data size: %llu)", event->header.type, event->data_size);
-                esf_agent_log_field_str("process", exe, event->header.process.exe.size);
+
+                if (event->header.type == ESF_EVENT_TYPE_PROCESS_EXECUTION) {
+                    char *interpreter = esf_item_as_string(event, process_execution.interpreter);
+                    esf_agent_log_field_str("interpreter", interpreter, event->process_execution.interpreter.size);
+                    if (interpreter) { free(interpreter); }
+                }
+
+                esf_agent_log_field_str("exe", exe, event->header.process.exe.size);
                 esf_agent_log_field_str("args", args, event->header.process.args.size);
                 esf_agent_log_field_str("env", env, event->header.process.env.size);
 
+                if (exe) { free(exe); }
                 if (args) { free(args); }
                 if (env) { free(env); }
             }

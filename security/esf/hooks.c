@@ -64,7 +64,7 @@ void _fill_process_from_task_info(esf_raw_event_t *raw_event,
 		mm = get_task_mm(task_fill_info->task);
 	}
 
-	if (task_fill_info->argp) {
+	if (!IS_ERR_OR_NULL(task_fill_info->argp)) {
 		esf_raw_event_add_item_ex(
 			raw_event, &process->args, ESF_ITEM_TYPE_STRING_ARR,
 			task_fill_info->argp, task_fill_info->arg_len, gfp,
@@ -78,7 +78,7 @@ void _fill_process_from_task_info(esf_raw_event_t *raw_event,
 					  ESF_ADD_ITEM_USERMEM);
 	}
 
-	if (task_fill_info->envp) {
+	if (!IS_ERR_OR_NULL(task_fill_info->envp)) {
 		esf_raw_event_add_item_ex(
 			raw_event, &process->env, ESF_ITEM_TYPE_STRING_ARR,
 			task_fill_info->envp, task_fill_info->env_len, gfp,
@@ -140,41 +140,113 @@ fill_integral:
 	}
 }
 
+static noinline int _dump_user_page(struct linux_binprm *bprm, void *buffer,
+				    ulong pos)
+{
+	struct page *page;
+#ifdef CONFIG_MMU
+	long ret;
+
+	mmap_read_lock(bprm->mm);
+	ret = get_user_pages_remote(bprm->mm, pos, 1, FOLL_FORCE, &page, NULL);
+	mmap_read_unlock(bprm->mm);
+
+	if (ret <= 0) {
+		return 0;
+	}
+#else
+	page = bprm->page[pos / PAGE_SIZE];
+#endif
+	const ulong offset = pos % PAGE_SIZE;
+	char *kaddr = kmap_atomic(page);
+
+	memcpy(buffer, kaddr + offset, PAGE_SIZE - offset);
+	kunmap_atomic(kaddr);
+
+#ifdef CONFIG_MMU
+	put_page(page);
+#endif
+
+	return PAGE_SIZE - offset;
+}
+
+static noinline void *_dump_user_pages(struct linux_binprm *bprm,
+				       void *__user userp, size_t size,
+				       gfp_t gfp)
+{
+	uint64_t upages_count = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+	uint64_t upages_size = upages_count * PAGE_SIZE;
+
+	ulong pos = (ulong)userp;
+	ulong koff = 0;
+
+	void *pages_dump = kzalloc(upages_size, gfp);
+
+	if (!pages_dump) {
+		goto fail;
+	}
+
+	for (int page_num = 0; page_num < upages_count; page_num++) {
+		int copied = _dump_user_page(bprm, pages_dump + koff, pos);
+
+		if (!copied) {
+			goto fail;
+		}
+
+		pos += copied;
+		koff += copied;
+	}
+
+	return pages_dump;
+
+fail:
+	if (pages_dump) {
+		kfree(pages_dump);
+	}
+
+	return NULL;
+}
+
 /*!
  * _get_flat_strings_from_stack() copies string array from process stack to kernel space
- * @p[in,out] : is a pointer to saved stack variable
- * @argc[in] : count of elements in array
- * @len[out] : total length of array
+ * @p: is a pointer to saved stack variable
+ * @argc: count of elements in array
+ * @len: total length of array
  * @return pointer to copied data
  *
  * @a p will be advanced to @a len in case it's possible to calculate one, even if failure due
  * data copying has occured, in any other cases @a p will be equal to its start value
  */
-static char *_get_flat_strings_from_stack(unsigned long *p, uint32_t argc,
-					  size_t *len)
+static noinline char *_get_flat_strings_from_stack(void **p, uint32_t argc,
+						   size_t *len)
 {
 	BUG_ON(!len);
 	BUG_ON(!p);
 
-	unsigned int ulen = 0;
-	const void __user *top = (void __user *)(*p);
+	const void *top = *p;
 	char *strs_arr = NULL;
+	size_t ulen = 0;
 
 	if (!top || !argc) {
 		goto out;
 	}
 
 	for (int i = 0; i < argc; i++) {
-		ulong l = strnlen_user((char *)(*p), MAX_ARG_STRLEN);
+		size_t l = strnlen((char *)*p, MAX_ARG_STRLEN);
+
+		if (l) { // escape '\0'
+			l++;
+		}
+
 		ulen += l;
 		*p += l;
 	}
 
 	if (!ulen) {
-		return NULL;
+		goto out;
 	}
 
-	strs_arr = memdup_user(top, ulen);
+	strs_arr = kmemdup(top, ulen, GFP_KERNEL);
 
 	if (IS_ERR_OR_NULL(strs_arr)) {
 		ulen = 0;
@@ -189,7 +261,6 @@ out:
 
 int esf_on_execve(struct task_struct *task, struct linux_binprm *bprm)
 {
-	ulong task_stack = 0;
 	int ret = 0;
 
 	if (!esf_anyone_subscribed_to(ESF_EVENT_TYPE_PROCESS_EXECUTION)) {
@@ -197,7 +268,8 @@ int esf_on_execve(struct task_struct *task, struct linux_binprm *bprm)
 	}
 
 	esf_raw_event_t *raw_event = esf_raw_event_create(
-		ESF_EVENT_TYPE_PROCESS_EXECUTION, ESF_EVENT_SIMPLE, GFP_KERNEL);
+		ESF_EVENT_TYPE_PROCESS_EXECUTION,
+		ESF_EVENT_SIMPLE | ESF_EVENT_CAN_CONTROL, GFP_KERNEL);
 
 	if (!raw_event) {
 		return 0;
@@ -206,14 +278,23 @@ int esf_on_execve(struct task_struct *task, struct linux_binprm *bprm)
 	fill_task_info_t fill_task_info;
 	memset(&fill_task_info, 0, sizeof(fill_task_info));
 
-	task_stack = bprm->p;
 	fill_task_info.task = task;
 
-	fill_task_info.argp = _get_flat_strings_from_stack(
-		&task_stack, bprm->argc, &fill_task_info.arg_len);
+	uint32_t uarr_size = (bprm->exec - bprm->p);
+	void *environ_dump = _dump_user_pages(bprm, (void *__user)bprm->p,
+					      uarr_size, GFP_KERNEL);
 
-	fill_task_info.envp = _get_flat_strings_from_stack(
-		&task_stack, bprm->envc, &fill_task_info.env_len);
+	if (environ_dump) {
+		void *stack_ptr = environ_dump;
+
+		fill_task_info.argp = _get_flat_strings_from_stack(
+			&stack_ptr, bprm->argc, &fill_task_info.arg_len);
+
+		fill_task_info.envp = _get_flat_strings_from_stack(
+			&stack_ptr, bprm->envc, &fill_task_info.env_len);
+
+		kfree(environ_dump);
+	}
 
 	fill_task_info.filename = kstrdup(bprm->filename, GFP_KERNEL);
 	fill_task_info.filename_len = strlen(bprm->filename);
@@ -222,14 +303,28 @@ int esf_on_execve(struct task_struct *task, struct linux_binprm *bprm)
 				     &raw_event->event.header.process,
 				     &fill_task_info, GFP_KERNEL);
 
-	ret = esf_submit_raw_event(raw_event, GFP_KERNEL);
+	if (bprm->interp) {
+		esf_raw_event_add_item(
+			raw_event,
+			&raw_event->event.process_execution.interpreter,
+			(void *)bprm->interp, strlen(bprm->interp), GFP_KERNEL);
+	}
+
+	ret = esf_submit_raw_event_ex(raw_event, GFP_KERNEL,
+				      ESF_SUBMIT_WAIT_FOR_DECISION);
 
 	esf_raw_event_put(raw_event);
 
 	return ret;
 }
 
-static struct security_hook_list _esf_hooks[] __ro_after_init = {};
+static int _esf_bprm_check_security(struct linux_binprm* bprm) {
+	return esf_on_execve(current, bprm);
+}
+
+static struct security_hook_list _esf_hooks[] __ro_after_init = {
+	LSM_HOOK_INIT(bprm_check_security, _esf_bprm_check_security)
+};
 
 void __init esf_hooks_init(void)
 {
