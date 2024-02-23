@@ -177,15 +177,24 @@ typedef struct esf_creds_info {
 	__kernel_gid32_t fsgid;
 } esf_creds_info_t;
 
+typedef struct esf_file_info {
+	__kernel_ino_t inode;
+	__s64 ctime;
+	__s64 mtime;
+	__s64 atime;
+	esf_item_t path;
+} esf_file_info_t;
+
 typedef struct esf_process_info {
 	__kernel_pid_t pid;
 	__kernel_pid_t tgid;
 	__kernel_pid_t ppid;
 	esf_creds_info_t creds;
-	esf_item_t exe;
+	esf_file_info_t exe;
 	esf_item_t args;
 	esf_item_t env;
 	esf_ns_info_t namespace;
+	esf_file_info_t file_info;
 } esf_process_info_t;
 
 typedef struct esf_event_header {
@@ -199,13 +208,20 @@ typedef struct esf_event_header {
 
 typedef struct esf_process_execution {
 	esf_item_t interpreter;
+	esf_process_info_t process;
 } esf_process_execution_t;
+
+typedef struct esf_process_exit {
+	int signal;
+	int code;
+} esf_process_exit_t;
 
 typedef struct esf_event {
 	esf_event_header_t header;
 
 	union {
 		esf_process_execution_t process_execution;
+		esf_process_exit_t process_exit;
 	};
 
 	__u64 data_size;

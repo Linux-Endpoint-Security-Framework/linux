@@ -18,3 +18,18 @@ config SECURITY_ESF_MAX_AGENTS
 	depends on SECURITY_ESF
 	help
 	  For allow multiple security agents increase this value (at you own risk). Also can be controlled via bool cli
+
+config SECURITY_ESF_DEBUG
+    bool "Enable debug options for ESF"
+    default false
+	depends on SECURITY_ESF
+
+config DEBUG_TRACE_LOG_EVENTS
+	bool "Debug logs about events creation/modification/deletion"
+	default false
+	depends on SECURITY_ESF_DEBUG
+
+config DEBUG_TRACE_LOG_DECISIONS
+	bool "Debug logs about agent decisions"
+	default false
+	depends on SECURITY_ESF_DEBUG

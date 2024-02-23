@@ -231,6 +231,7 @@ _send_event_to_user(char *buffer, size_t buffer_size,
 
 		esf_raw_item_get(raw_item);
 
+#ifdef CONFIG_DEBUG_TRACE_LOG_EVENTS
 		void *item_data_dst =
 			items_data_buffer + raw_item->item->offset;
 
@@ -239,6 +240,7 @@ _send_event_to_user(char *buffer, size_t buffer_size,
 			raw_item->item->item_type, raw_item->item->size,
 			raw_item->item->offset, (uint64_t)raw_item->data,
 			(uint64_t)item_data_dst);
+#endif
 
 		non_copied =
 			copy_to_user(items_data_buffer + raw_item->item->offset,

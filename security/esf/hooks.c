@@ -13,13 +13,27 @@
 
 void _fill_ns_from_task(esf_ns_info_t *ns, struct task_struct *task)
 {
-	ns->uts_ns = task->nsproxy->uts_ns->ns.inum;
-	ns->ipc_ns = task->nsproxy->ipc_ns->ns.inum;
-	ns->mnt_ns = from_mnt_ns(task->nsproxy->mnt_ns)->inum;
-	ns->pid_ns_for_children = task->nsproxy->pid_ns_for_children->ns.inum;
-	ns->net_ns = task->nsproxy->net_ns->ns.inum;
-	ns->time_ns = task->nsproxy->time_ns->ns.inum;
-	ns->time_ns_for_children = task->nsproxy->time_ns_for_children->ns.inum;
+	if (task->nsproxy) {
+		ns->uts_ns = task->nsproxy->uts_ns->ns.inum;
+		ns->ipc_ns = task->nsproxy->ipc_ns->ns.inum;
+		ns->mnt_ns = from_mnt_ns(task->nsproxy->mnt_ns)->inum;
+		ns->pid_ns_for_children =
+			task->nsproxy->pid_ns_for_children->ns.inum;
+		ns->net_ns = task->nsproxy->net_ns->ns.inum;
+		ns->time_ns = task->nsproxy->time_ns->ns.inum;
+		ns->time_ns_for_children =
+			task->nsproxy->time_ns_for_children->ns.inum;
+	} else {
+		ns->uts_ns = init_nsproxy.uts_ns->ns.inum;
+		ns->ipc_ns = init_nsproxy.ipc_ns->ns.inum;
+		ns->mnt_ns = from_mnt_ns(init_nsproxy.mnt_ns)->inum;
+		ns->pid_ns_for_children =
+			init_nsproxy.pid_ns_for_children->ns.inum;
+		ns->net_ns = init_nsproxy.net_ns->ns.inum;
+		ns->time_ns = init_nsproxy.time_ns->ns.inum;
+		ns->time_ns_for_children =
+			init_nsproxy.time_ns_for_children->ns.inum;
+	}
 }
 
 void _fill_creds_from_task(esf_creds_info_t *creds, struct task_struct *task)
@@ -35,6 +49,12 @@ void _fill_creds_from_task(esf_creds_info_t *creds, struct task_struct *task)
 	creds->fsgid = task_cred_xxx(task, fsgid).val;
 }
 
+typedef struct fill_file_info {
+	struct inode *inode;
+	char *__will_be_moved filename;
+	size_t filename_len;
+} fill_file_info_t;
+
 typedef struct fill_task_info {
 	struct task_struct *task;
 	struct mm_struct *mm;
@@ -42,9 +62,33 @@ typedef struct fill_task_info {
 	size_t arg_len;
 	char *__will_be_moved envp;
 	size_t env_len;
-	char *__will_be_moved filename;
-	size_t filename_len;
+	fill_file_info_t *exe_info;
 } fill_task_info_t;
+
+void _fill_file_from_file_info(esf_raw_event_t *raw_event,
+			       esf_file_info_t *file,
+			       fill_file_info_t *file_fill_info, gfp_t gfp)
+{
+	BUG_ON(!file_fill_info);
+
+	if (file_fill_info->filename) {
+		esf_raw_event_add_item_ex(
+			raw_event, &file->path, ESF_ITEM_TYPE_STRING,
+			file_fill_info->filename, file_fill_info->filename_len,
+			gfp, ESF_ADD_ITEM_KERNMEM | ESF_ADD_ITEM_MOVEMEM);
+	}
+
+	if (file_fill_info->inode) {
+		file->inode = file_fill_info->inode->i_ino;
+
+		file->ctime = timespec64_to_ktime(
+			inode_get_ctime(file_fill_info->inode));
+		file->atime = timespec64_to_ktime(
+			inode_get_atime(file_fill_info->inode));
+		file->mtime = timespec64_to_ktime(
+			inode_get_mtime(file_fill_info->inode));
+	}
+}
 
 void _fill_process_from_task_info(esf_raw_event_t *raw_event,
 				  esf_process_info_t *process,
@@ -52,8 +96,6 @@ void _fill_process_from_task_info(esf_raw_event_t *raw_event,
 {
 	BUG_ON(!task_fill_info);
 	BUG_ON(!task_fill_info->task);
-
-	get_task_struct(task_fill_info->task);
 
 	struct mm_struct *mm = NULL;
 
@@ -92,14 +134,12 @@ void _fill_process_from_task_info(esf_raw_event_t *raw_event,
 					  ESF_ADD_ITEM_USERMEM);
 	}
 
-	if (task_fill_info->filename) {
-		esf_raw_event_add_item_ex(
-			raw_event, &process->exe, ESF_ITEM_TYPE_STRING,
-			task_fill_info->filename,
-			strlen(task_fill_info->filename), gfp,
-			ESF_ADD_ITEM_KERNMEM | ESF_ADD_ITEM_MOVEMEM);
+	if (task_fill_info->exe_info) {
+		_fill_file_from_file_info(raw_event, &process->exe,
+					  task_fill_info->exe_info, gfp);
 
 	} else if (mm && mm->exe_file) {
+		fill_file_info_t exe_info = { 0 };
 		char *path_buffer = kmalloc(PATH_MAX, gfp);
 
 		if (!path_buffer) {
@@ -112,18 +152,32 @@ void _fill_process_from_task_info(esf_raw_event_t *raw_event,
 			esf_log_err("Unable to fill process path, err: %ld",
 				    PTR_ERR(fpath));
 
-			esf_raw_event_add_item_type(
-				raw_event, &process->exe, ESF_ITEM_TYPE_STRING,
-				task_fill_info->task->comm,
-				strlen(task_fill_info->task->comm), gfp);
+			exe_info.filename =
+				kstrdup(task_fill_info->task->comm, gfp);
+			exe_info.filename_len =
+				strlen(task_fill_info->task->comm);
+
+			_fill_file_from_file_info(raw_event, &process->exe,
+						  &exe_info, gfp);
 
 		} else {
-			esf_raw_event_add_item_type(raw_event, &process->exe,
-						    ESF_ITEM_TYPE_STRING, fpath,
-						    strlen(fpath), gfp);
+			exe_info.inode = file_inode(mm->exe_file);
+			exe_info.filename = kstrdup(fpath, gfp);
+			exe_info.filename_len = strlen(fpath);
+
+			_fill_file_from_file_info(raw_event, &process->exe,
+						  &exe_info, gfp);
 		}
 
 		kfree(path_buffer);
+
+	} else if (!mm && task_fill_info->task->flags & PF_KTHREAD) {
+		fill_file_info_t exe_info = { 0 };
+		exe_info.filename = kstrdup("kthread", gfp);
+		exe_info.filename_len = sizeof("kthread");
+
+		_fill_file_from_file_info(raw_event, &process->exe, &exe_info,
+					  gfp);
 	}
 
 fill_integral:
@@ -132,8 +186,6 @@ fill_integral:
 
 	_fill_creds_from_task(&process->creds, task_fill_info->task);
 	_fill_ns_from_task(&process->namespace, task_fill_info->task);
-
-	put_task_struct(task_fill_info->task);
 
 	if (mm) {
 		mmput(mm);
@@ -275,10 +327,18 @@ int esf_on_execve(struct task_struct *task, struct linux_binprm *bprm)
 		return 0;
 	}
 
-	fill_task_info_t fill_task_info;
-	memset(&fill_task_info, 0, sizeof(fill_task_info));
+	struct task_struct *parent_task =
+		task->parent ? get_task_struct(task->parent) :
+			       get_task_struct(task);
+
+	fill_task_info_t fill_task_info = { 0 };
+	fill_file_info_t fill_task_file_info = { 0 };
+	fill_task_info.exe_info = &fill_task_file_info;
+
+	fill_task_info_t fill_header_task_info = { 0 };
 
 	fill_task_info.task = task;
+	fill_header_task_info.task = parent_task;
 
 	uint32_t uarr_size = (bprm->exec - bprm->p);
 	void *environ_dump = _dump_user_pages(bprm, (void *__user)bprm->p,
@@ -296,12 +356,24 @@ int esf_on_execve(struct task_struct *task, struct linux_binprm *bprm)
 		kfree(environ_dump);
 	}
 
-	fill_task_info.filename = kstrdup(bprm->filename, GFP_KERNEL);
-	fill_task_info.filename_len = strlen(bprm->filename);
+	// preprare information about file is going to be executed
+	struct fd file_to_exec = fdget(bprm->execfd);
+	struct inode *inode_to_exec = file_inode(file_to_exec.file);
+	fill_task_info.exe_info->inode = inode_to_exec;
+	fill_task_info.exe_info->filename = kstrdup(bprm->filename, GFP_KERNEL);
+	fill_task_info.exe_info->filename_len =
+		bprm->filename ? strlen(bprm->filename) : 0;
+	fdput(file_to_exec);
 
+	// fill header with parent information
 	_fill_process_from_task_info(raw_event,
 				     &raw_event->event.header.process,
-				     &fill_task_info, GFP_KERNEL);
+				     &fill_header_task_info, GFP_KERNEL);
+
+	// fill event payload process
+	_fill_process_from_task_info(
+		raw_event, &raw_event->event.process_execution.process,
+		&fill_task_info, GFP_KERNEL);
 
 	if (bprm->interp) {
 		esf_raw_event_add_item(
@@ -315,15 +387,47 @@ int esf_on_execve(struct task_struct *task, struct linux_binprm *bprm)
 
 	esf_raw_event_put(raw_event);
 
+	put_task_struct(parent_task);
+
 	return ret;
 }
 
-static int _esf_bprm_check_security(struct linux_binprm* bprm) {
+void esf_on_task_free(struct task_struct *task)
+{
+	if (!esf_anyone_subscribed_to(ESF_EVENT_TYPE_PROCESS_EXITED)) {
+		return;
+	}
+
+	esf_raw_event_t *raw_event = esf_raw_event_create(
+		ESF_EVENT_TYPE_PROCESS_EXITED, ESF_EVENT_SIMPLE, GFP_KERNEL);
+
+	fill_task_info_t fill_task_info = { 0 };
+	fill_task_info.task = task;
+
+	_fill_process_from_task_info(raw_event,
+				     &raw_event->event.header.process,
+				     &fill_task_info, GFP_KERNEL);
+
+	raw_event->event.process_exit.code = task->exit_code;
+	raw_event->event.process_exit.signal = task->exit_signal;
+
+	esf_submit_raw_event(raw_event, GFP_KERNEL);
+	esf_raw_event_put(raw_event);
+}
+
+static int _esf_bprm_check_security(struct linux_binprm *bprm)
+{
 	return esf_on_execve(current, bprm);
 }
 
+static void _esf_task_free(struct task_struct *task)
+{
+	esf_on_task_free(task);
+}
+
 static struct security_hook_list _esf_hooks[] __ro_after_init = {
-	LSM_HOOK_INIT(bprm_check_security, _esf_bprm_check_security)
+	LSM_HOOK_INIT(bprm_check_security, _esf_bprm_check_security),
+	LSM_HOOK_INIT(task_free, _esf_task_free),
 };
 
 void __init esf_hooks_init(void)

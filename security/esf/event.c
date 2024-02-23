@@ -61,7 +61,7 @@ esf_raw_item_t *_esf_raw_item_create(esf_item_t *__owned item, void *data,
 			return NULL;
 		}
 
-		((char*)raw_item->data)[item_size] = '\0';
+		((char *)raw_item->data)[item_size] = '\0';
 	} else {
 		// memory will be just moved, so keep data size as passed to func
 		raw_item->data = data;
@@ -72,8 +72,10 @@ esf_raw_item_t *_esf_raw_item_create(esf_item_t *__owned item, void *data,
 	raw_item->item = item;
 	raw_item->item->size = item_size;
 
+#ifdef CONFIG_DEBUG_TRACE_LOG_EVENTS
 	esf_log_debug("Created raw item 0x%llx, size: %zu", (uint64_t)raw_item,
 		      data_size);
+#endif
 
 	return esf_raw_item_get(raw_item);
 }
@@ -82,7 +84,9 @@ void _efs_raw_item_destroy(esf_raw_item_t *raw_item)
 {
 	BUG_ON(!raw_item);
 
+#ifdef CONFIG_DEBUG_TRACE_LOG_EVENTS
 	esf_log_debug("Destroying raw item 0x%llx", (uint64_t)raw_item);
+#endif
 
 	if (raw_item->item) {
 		raw_item->item->offset = 0;
@@ -132,8 +136,10 @@ esf_raw_event_t *esf_raw_event_create(esf_event_type_t type,
 	INIT_LIST_HEAD(&raw_event->raw_items);
 	atomic_set(&raw_event->refs, 0);
 
+#ifdef CONFIG_DEBUG_TRACE_LOG_EVENTS
 	esf_log_debug("Created raw event 0x%llx from %lld", (uint64_t)raw_event,
 		      raw_event->event.header.timestamp);
+#endif
 
 	return esf_raw_event_get(raw_event);
 }
@@ -143,8 +149,10 @@ void _esf_raw_event_destroy(esf_raw_event_t *raw_event)
 	esf_raw_item_t *raw_item = NULL;
 	esf_raw_item_t *raw_item_tmp = NULL;
 
+#ifdef CONFIG_DEBUG_TRACE_LOG_EVENTS
 	esf_log_debug("Destroying raw event 0x%llx from %lld",
 		      (uint64_t)raw_event, raw_event->event.header.timestamp);
+#endif
 
 	list_for_each_entry_safe(raw_item, raw_item_tmp, &raw_event->raw_items,
 				 _node) {
@@ -176,8 +184,10 @@ int esf_raw_event_add_item_ex(esf_raw_event_t *raw_event, esf_item_t *item,
 		_esf_raw_item_create(item, data, data_size, gfp, copy_func);
 
 	if (!raw_item) {
+#ifdef CONFIG_DEBUG_TRACE_LOG_EVENTS
 		esf_log_debug("Unable to create raw item for 0x%llx",
 			      (uint64_t)raw_event);
+#endif
 
 		return -ENOMEM;
 	}
@@ -186,9 +196,11 @@ int esf_raw_event_add_item_ex(esf_raw_event_t *raw_event, esf_item_t *item,
 	raw_item->item->item_type = item_type;
 	raw_item->item->offset = raw_event->items_data_size;
 
+#ifdef CONFIG_DEBUG_TRACE_LOG_EVENTS
 	esf_log_debug("Added raw item at 0x%llx, size: %u, offset: %llu",
 		      (uint64_t)raw_event, raw_item->item->size,
 		      raw_item->item->offset);
+#endif
 
 	raw_event->items_data_size += raw_item->item->size;
 	raw_event->event.data_size = raw_event->items_data_size;
@@ -253,6 +265,9 @@ int esf_event_id_make_decision(esf_event_id event_id,
 
 	hash_for_each_possible(_wait_decision_tbl, raw_event, _hnode,
 			       event_id) {
+		found = true;
+
+#ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
 		esf_log_debug(RAW_EVENT_FMT_STR " - %s by agent %d",
 			      RAW_EVENT_FMT(raw_event),
 			      decision == ESF_ACTION_DECISION_ALLOW ?
@@ -260,13 +275,12 @@ int esf_event_id_make_decision(esf_event_id event_id,
 				      "denied",
 			      current->pid);
 
-		found = true;
-
 		if (decision == ESF_ACTION_DECISION_DENY) {
 			esf_log_warn("Action %d denied by security agent %d",
 				     raw_event->event.header.type,
 				     current->pid);
 		}
+#endif
 
 		// if not denied, write new decision
 		if (raw_event->decision != ESF_ACTION_DECISION_DENY) {
@@ -332,6 +346,7 @@ esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event)
 		goto out;
 	}
 
+#ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
 	uint64_t timeout = msecs_to_jiffies(_ESF_EVENT_DECISION_TIMEOUT_MS);
 	uint64_t till_timeout = wait_for_completion_timeout(
 		&raw_event->decisions_completion, timeout);
@@ -348,6 +363,7 @@ esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event)
 								      "deny",
 			jiffies_to_msecs(timeout - till_timeout));
 	}
+#endif
 
 	final_decision = raw_event->decision;
 	esf_raw_event_remove_to_decision_wait_table(raw_event);

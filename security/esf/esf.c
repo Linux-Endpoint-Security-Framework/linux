@@ -219,15 +219,19 @@ put_agent:
 	}
 
 	if (agents_want_control == 0) {
+#ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
 		esf_log_debug("Nobody want control " RAW_EVENT_FMT_STR,
 			      RAW_EVENT_FMT(raw_event));
+#endif
 	}
 
 	// if any at least one agent want to control this event, we should
 	// wait for decision from all agents
 	if (agents_want_control > 0 && (flags & ESF_SUBMIT_WAIT_FOR_DECISION)) {
+#ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
 		esf_log_debug("%d agents want control " RAW_EVENT_FMT_STR,
 			      agents_want_control, RAW_EVENT_FMT(raw_event));
+#endif
 
 		// add this event to wait table with calculated
 		// amount of agents which will make decision
