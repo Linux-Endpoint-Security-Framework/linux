@@ -262,6 +262,14 @@ _Noreturn void *_print_routine(void *arg) {
             if (child_exe) { free(child_exe); }
             if (child_args) { free(child_args); }
             if (child_env) { free(child_env); }
+
+        } else if (ESF_EVENT_IS_IN_CATEGORY(FILE, event->header.type)) {
+            /* all file events has file_info at top of struct */
+            const char *fname = esf_item_as_ref(event, file_open.file.path);
+
+            esf_agent_log("\tfile { ");
+            esf_agent_logn_field_str("\tfile: ", fname, event->file_open.file.path.size);
+            esf_agent_log("\t}");
         }
 
         esf_agent_log("} -> %s", decision == ESF_ACTION_DECISION_ALLOW ? "allow" : "deny");
@@ -330,6 +338,8 @@ int main(int argc, char **argv) {
 
     error |= esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION, ESF_SUBSCRIBE_AS_CONTROLLER);
     error |= esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_PROCESS_EXITED, ESF_SUBSCRIBE_NONE);
+    error |= esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_FILE_OPEN, ESF_SUBSCRIBE_NONE);
+    error |= esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_FILE_TRUNCATE, ESF_SUBSCRIBE_NONE);
 
     if (error) {
         esf_agent_err("esf_agent_subscribe");
@@ -371,14 +381,13 @@ int main(int argc, char **argv) {
 
             for_each_esf_event(esf_events_buff, events_count, it) {
                 const esf_event_t *event = esf_event_iterator_get_event(it);
-                const char *parent_exe = esf_item_as_ref(event, header.process.exe.path);
                 esf_action_decision_t decision = ESF_ACTION_DECISION_ALLOW;
 
                 if (event->header.flags & ESF_EVENT_CAN_CONTROL) {
-                    if (_is_program(parent_exe, "python", event->header.process.exe.path.size)) {
-                        decision = ESF_ACTION_DECISION_DENY;
-                    } else {
-                        decision = ESF_ACTION_DECISION_ALLOW;
+                    if (event->header.type == ESF_EVENT_TYPE_PROCESS_EXECUTION) {
+                        const char *exe_path = esf_item_as_ref(event, header.process.exe.path);
+                        decision = _is_program(exe_path, "python", event->header.process.exe.path.size)
+                                   ? ESF_ACTION_DECISION_DENY : ESF_ACTION_DECISION_ALLOW;
                     }
 
                     esf_event_make_decision(agent_fd, event, decision);

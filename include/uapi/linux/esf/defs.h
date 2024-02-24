@@ -179,6 +179,10 @@ typedef struct esf_creds_info {
 
 typedef struct esf_file_info {
 	__kernel_ino_t inode;
+	__kernel_mode_t mode;
+	__kernel_size_t size;
+	__kernel_uid_t uid;
+	__kernel_gid_t gid;
 	__s64 ctime;
 	__s64 mtime;
 	__s64 atime;
@@ -216,12 +220,24 @@ typedef struct esf_process_exit {
 	int code;
 } esf_process_exit_t;
 
+typedef struct esf_file_open {
+	esf_file_info_t file;
+	__u32 flags;
+} esf_file_open_t;
+
+typedef struct esf_file_truncate {
+	esf_file_info_t file;
+} esf_file_truncate_t;
+
 typedef struct esf_event {
 	esf_event_header_t header;
 
 	union {
 		esf_process_execution_t process_execution;
 		esf_process_exit_t process_exit;
+
+		esf_file_open_t file_open;
+		esf_file_truncate_t file_truncate;
 	};
 
 	__u64 data_size;

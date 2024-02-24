@@ -5,7 +5,6 @@
 #include <linux/list.h>
 
 #define __owned
-#define __will_be_moved
 
 typedef struct esf_raw_event_item {
 	struct list_head _node;

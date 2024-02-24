@@ -218,7 +218,8 @@ put_agent:
 		esf_agent_put(receiver_agent);
 	}
 
-	if (agents_want_control == 0) {
+	if (agents_want_control == 0 &&
+	    raw_event->event.header.flags & ESF_EVENT_CAN_CONTROL) {
 #ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
 		esf_log_debug("Nobody want control " RAW_EVENT_FMT_STR,
 			      RAW_EVENT_FMT(raw_event));
