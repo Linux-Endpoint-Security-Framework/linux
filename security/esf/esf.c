@@ -18,7 +18,7 @@ module_param(verify_sig, bool, 0600);
 MODULE_PARM_DESC(verify_sig, "Enable agent signature verification");
 
 static int max_agents = CONFIG_SECURITY_ESF_MAX_AGENTS;
-module_param(max_agents, int, CONFIG_SECURITY_ESF_MAX_AGENTS);
+module_param(max_agents, int, 0600);
 MODULE_PARM_DESC(max_agents,
 		 "Specify maximum agents can be registered, (<" esf_str(
 			 CONFIG_SECURITY_MAX_AGENTS) ")");
@@ -385,7 +385,19 @@ static int __exit _esf_exit(void)
 	return 0;
 }
 
+static struct lsm_blob_sizes _esf_blobs = {
+	.lbs_task = sizeof(esf_process_lsb_t),
+	.lbs_cred = 0,
+	.lbs_file = 0,
+	.lbs_inode = 0,
+	.lbs_superblock = 0,
+	.lbs_ipc = 0,
+	.lbs_msg_msg = 0,
+	.lbs_xattr_count = 0,
+};
+
 DEFINE_LSM(esf) = {
 	.name = "esf",
 	.init = _esf_init,
+	.blobs = &_esf_blobs,
 };

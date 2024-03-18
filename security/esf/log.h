@@ -6,6 +6,10 @@
 #define _str(x) #x
 #define esf_str(x) _str(x)
 
+#if !defined(__BASE_FILE__)
+#define __BASE_FILE__ "masked"
+#endif
+
 #define esf_log_debug(fmt, ...) \
 	pr_info("esf: [debug:" __BASE_FILE__ "] " fmt "\n", ##__VA_ARGS__)
 

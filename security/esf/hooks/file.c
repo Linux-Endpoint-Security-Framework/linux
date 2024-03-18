@@ -30,7 +30,7 @@ int esf_on_file_open(struct file *file)
 	file_fill_data.file = file;
 
 	esf_fill_process_from_fill_data(raw_event,
-					&raw_event->event.header.process,
+					&raw_event->event.process,
 					&process_fill_data, GFP_KERNEL);
 
 	esf_fill_file_from_fill_data(raw_event,
@@ -77,7 +77,7 @@ int esf_on_file_truncate(struct file *file)
 	file_fill_data.file = file;
 
 	esf_fill_process_from_fill_data(raw_event,
-					&raw_event->event.header.process,
+					&raw_event->event.process,
 					&process_fill_data, GFP_KERNEL);
 
 	esf_fill_file_from_fill_data(raw_event,

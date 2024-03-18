@@ -38,11 +38,21 @@ typedef struct esf_event_iterator {
     const char *_buffer;
 } esf_event_iterator_t;
 
-static inline esf_event_iterator_t esf_new_event_iterator(const void *buffer, uint64_t events_count) {
+static inline esf_event_iterator_t esf_new_event_iterator_raw(const void *buffer, uint64_t events_count) {
     esf_event_iterator_t it = {
             ._i = 0,
             ._buffer = buffer,
             ._total = events_count,
+    };
+
+    return it;
+}
+
+static inline esf_event_iterator_t esf_new_event_iterator(const esf_events_t *events_buffer) {
+    esf_event_iterator_t it = {
+            ._i = 0,
+            ._buffer = (void *) events_buffer->events,
+            ._total = events_buffer->count,
     };
 
     return it;
@@ -87,8 +97,8 @@ static inline esf_event_iterator_t esf_event_iterator_next(esf_event_iterator_t 
     return it;
 }
 
-#define for_each_esf_event(buff, max, it)\
-            for (esf_event_iterator_t it = esf_new_event_iterator(buff, max);\
+#define for_each_esf_event(buff, it)\
+            for (esf_event_iterator_t it = esf_new_event_iterator(((esf_events_t*)buff));\
                  !esf_event_iterator_is_end(it);\
                  it = esf_event_iterator_next(it))\
 
@@ -223,26 +233,28 @@ print_elem_t *print_queue_pop(print_queue_t *pq) {
     return elem;
 }
 
-_Noreturn void *_print_routine(void *arg) {
+static bool _print_routine_should_run = true;
+
+void *_print_routine(void *arg) {
     print_queue_t *print_queue = arg;
 
-    while (true) {
+    while (_print_routine_should_run) {
         print_elem_t *el = print_queue_pop(print_queue);
         if (!el) { continue; }
         const esf_event_t *event = el->event;
         esf_action_decision_t decision = el->decision;
 
-        char *parent_exe = esf_item_as_string(event, header.process.exe.path);
-        char *parent_args = esf_item_as_string(event, header.process.args);
-        char *parent_env = esf_item_as_string(event, header.process.env);
+        char *parent_exe = esf_item_as_string(event, process.exe.path);
+        char *parent_args = esf_item_as_string(event, process.args);
+        char *parent_env = esf_item_as_string(event, process.env);
 
         esf_agent_log("event [%llu] type: %d, data size: %llu {", event->header.id, event->header.type,
                       event->data_size);
 
         esf_agent_log("\tparent { ");
-        esf_agent_logn_field_str("\texe", parent_exe, event->header.process.exe.path.size);
-        esf_agent_logn_field_str("\targs", parent_args, event->header.process.args.size);
-        esf_agent_logn_field_str("\tenv", parent_env, event->header.process.env.size);
+        esf_agent_logn_field_str("\texe", parent_exe, event->process.exe.path.size);
+        esf_agent_logn_field_str("\targs", parent_args, event->process.args.size);
+        esf_agent_logn_field_str("\tenv", parent_env, event->process.env.size);
         esf_agent_log("\t}");
 
         if (event->header.type == ESF_EVENT_TYPE_PROCESS_EXECUTION) {
@@ -280,12 +292,14 @@ _Noreturn void *_print_routine(void *arg) {
 
         free(el);
     }
+
+    return NULL;
 }
 
 int main(int argc, char **argv) {
     int epoll_fd = 0, esf_fd = 0, agent_fd = 0;
     size_t buffer_size = PAGE_SIZE * 4096;
-    esf_event_t *esf_events_buff = malloc(buffer_size);
+    esf_events_t *esf_events_buff = malloc(buffer_size);
     mprotect(esf_events_buff, buffer_size, PROT_WRITE | PROT_READ);
 
     pthread_t print_thread;
@@ -293,7 +307,7 @@ int main(int argc, char **argv) {
     memset(&print_queue, 0, sizeof(print_queue));
 
     pthread_mutex_init(&print_queue.mtx, NULL);
-    pthread_create(&print_thread, NULL, _print_routine, &print_queue);
+    int print_th = pthread_create(&print_thread, NULL, _print_routine, &print_queue);
 
     struct winsize w;
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
@@ -371,22 +385,23 @@ int main(int argc, char **argv) {
                 continue;
             }
 
-            long events_count = read(events[i].data.fd, esf_events_buff, buffer_size);
+            long bytes_read = read(events[i].data.fd, esf_events_buff, buffer_size);
 
-            if (events_count <= 0) {
-                continue;
+            if (bytes_read <= 0) {
+                error = errno;
+                goto out;
             }
 
-            esf_agent_log("accepted %ld events", events_count);
+            esf_agent_log("accepted %llu events (read: %ld bytes)", esf_events_buff->count, bytes_read);
 
-            for_each_esf_event(esf_events_buff, events_count, it) {
+            for_each_esf_event(esf_events_buff, it) {
                 const esf_event_t *event = esf_event_iterator_get_event(it);
                 esf_action_decision_t decision = ESF_ACTION_DECISION_ALLOW;
 
                 if (event->header.flags & ESF_EVENT_CAN_CONTROL) {
                     if (event->header.type == ESF_EVENT_TYPE_PROCESS_EXECUTION) {
-                        const char *exe_path = esf_item_as_ref(event, header.process.exe.path);
-                        decision = _is_program(exe_path, "python", event->header.process.exe.path.size)
+                        const char *exe_path = esf_item_as_ref(event, process.exe.path);
+                        decision = _is_program(exe_path, "python", event->process.exe.path.size)
                                    ? ESF_ACTION_DECISION_DENY : ESF_ACTION_DECISION_ALLOW;
                     }
 
@@ -399,6 +414,9 @@ int main(int argc, char **argv) {
     }
 
     out:
+    _print_routine_should_run = false;
+    pthread_join(print_thread, NULL);
+
     pthread_mutex_destroy(&print_queue.mtx);
 
     if (agent_fd > 0) { close(agent_fd); }

@@ -56,7 +56,7 @@ esf_raw_item_t *_esf_raw_item_create(esf_item_t *__owned item, void *data,
 			return NULL;
 		}
 
-		if (copy_func(raw_item->data, data, data_size) != 0) {
+		if (copy_func(raw_item->data, data, item_size) != 0) {
 			_efs_raw_item_free(raw_item);
 			return NULL;
 		}

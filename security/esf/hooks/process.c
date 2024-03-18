@@ -185,7 +185,7 @@ int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 
 	// fill header with parent information
 	esf_fill_process_from_fill_data(raw_event,
-					&raw_event->event.header.process,
+					&raw_event->event.process,
 					&fill_header_task_info, GFP_KERNEL);
 
 	// fill event payload process
@@ -223,7 +223,7 @@ void esf_on_process_exited(struct task_struct *task)
 	fill_task_info.task = task;
 
 	esf_fill_process_from_fill_data(raw_event,
-					&raw_event->event.header.process,
+					&raw_event->event.process,
 					&fill_task_info, GFP_KERNEL);
 
 	raw_event->event.process_exit.code = task->exit_code;

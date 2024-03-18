@@ -17,9 +17,10 @@ typedef enum esf_agent_flags {
 
 typedef uint64_t esf_agent_subscriptions_mask[_ESF_EVENT_CATEGORY_MAX + 1];
 
-typedef struct esf_agent_raw_item_holder {
+typedef struct esf_raw_event_holder {
 	struct list_head _node;
 	esf_raw_event_t *raw_event;
+	atomic_t refc;
 } esf_raw_event_holder_t;
 
 typedef struct esf_agent {
@@ -35,6 +36,8 @@ typedef struct esf_agent {
 	wait_queue_head_t events_queue_wq;
 	rwlock_t event_queue_lock;
 	uint64_t events_count;
+	uint64_t events_notify_count;
+	uint64_t events_last_notify;
 	struct list_head events_queue; // esf_agent_raw_item_holder_t
 } __randomize_layout esf_agent_t;
 

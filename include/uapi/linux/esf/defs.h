@@ -206,7 +206,6 @@ typedef struct esf_event_header {
 	esf_event_type_t type;
 	esf_version version;
 	esf_event_flags_t flags;
-	esf_process_info_t process;
 	__kernel_time64_t timestamp;
 } esf_event_header_t;
 
@@ -231,6 +230,7 @@ typedef struct esf_file_truncate {
 
 typedef struct esf_event {
 	esf_event_header_t header;
+	esf_process_info_t process;
 
 	union {
 		esf_process_execution_t process_execution;
@@ -243,5 +243,10 @@ typedef struct esf_event {
 	__u64 data_size;
 	char data[];
 } esf_event_t;
+
+typedef struct esf_events {
+	__u64 count;
+	esf_event_t events[];
+} esf_events_t;
 
 #endif /* _LINUX_ESF_DEFS_H */

@@ -8,24 +8,31 @@
 #include <linux/poll.h>
 #include <linux/esf/ctl.h>
 
+static esf_raw_event_holder_t *_get_event_holder(esf_raw_event_holder_t *holder)
+{
+	atomic_inc(&holder->refc);
+	return holder;
+}
+
 static esf_raw_event_holder_t *_create_event_holder(esf_raw_event_t *for_event,
 						    gfp_t gfp)
 {
 	BUG_ON(!for_event);
 
-	esf_raw_event_holder_t *item =
+	esf_raw_event_holder_t *holder =
 		kmalloc(sizeof(esf_raw_event_holder_t), gfp);
 
-	if (!item) {
+	if (!holder) {
 		return NULL;
 	}
 
-	INIT_LIST_HEAD(&item->_node);
-	item->raw_event = for_event;
+	INIT_LIST_HEAD(&holder->_node);
+	holder->raw_event = for_event;
+	atomic_set(&holder->refc, 0);
 
 	esf_raw_event_get(for_event);
 
-	return item;
+	return _get_event_holder(holder);
 }
 
 static void _destroy_event_holder(esf_raw_event_holder_t *holder)
@@ -34,19 +41,27 @@ static void _destroy_event_holder(esf_raw_event_holder_t *holder)
 	kfree(holder);
 }
 
+static void _put_event_holder(esf_raw_event_holder_t *holder)
+{
+	if (atomic_dec_and_test(&holder->refc)) {
+		_destroy_event_holder(holder);
+	}
+}
+
 static void _esf_agent_destroy(esf_agent_t *agent)
 {
 	agent->flags = 0;
 
 	esf_raw_event_holder_t *tmp = NULL;
-	esf_raw_event_holder_t *event_item = NULL;
+	esf_raw_event_holder_t *event_holder = NULL;
 
 	write_lock(&agent->event_queue_lock);
 
-	list_for_each_entry_safe(event_item, tmp, &agent->events_queue, _node) {
+	list_for_each_entry_safe(event_holder, tmp, &agent->events_queue,
+				 _node) {
 		agent->events_count--;
-		list_del(&event_item->_node);
-		_destroy_event_holder(event_item);
+		list_del(&event_holder->_node);
+		_put_event_holder(event_holder);
 	}
 
 	write_unlock(&agent->event_queue_lock);
@@ -281,7 +296,6 @@ static ssize_t _agent_fd_read(struct file *filp, char __user *buffer,
 {
 	esf_agent_t *agent = filp->private_data;
 	esf_raw_event_holder_t *event_holder = NULL;
-	ssize_t result = 0;
 
 	if (filp->f_op != &_agent_fd_fops) {
 		return -EBADFD;
@@ -297,17 +311,28 @@ static ssize_t _agent_fd_read(struct file *filp, char __user *buffer,
 	uint64_t max_events_to_send = agent->events_count;
 	read_unlock(&agent->event_queue_lock);
 
+	esf_events_t *__user events_arr = (esf_events_t *)buffer;
+	void *__user serialized_events_arr = events_arr->events;
+	size_t serialized_events_arr_size = buffer_size - sizeof(*events_arr);
+
 	while (max_events_to_send > 0) {
+		if (!(agent->flags & ESF_AGENT_ACTIVE)) {
+			return -EPIPE;
+		}
+
 		write_lock(&agent->event_queue_lock);
+		// get event holder and refup one
 		event_holder = list_first_entry(&agent->events_queue,
 						esf_raw_event_holder_t, _node);
-		list_del(&event_holder->_node);
+		_get_event_holder(event_holder);
+		list_del_init(&event_holder->_node);
 		agent->events_count--;
 		write_unlock(&agent->event_queue_lock);
 
 		BUG_ON(!event_holder->raw_event);
 
-		send_err = _send_event_to_user(buffer, buffer_size,
+		send_err = _send_event_to_user(serialized_events_arr,
+					       serialized_events_arr_size,
 					       event_holder, &cur_buff_offset);
 
 		if (send_err) {
@@ -321,14 +346,19 @@ static ssize_t _agent_fd_read(struct file *filp, char __user *buffer,
 
 		events_sent++;
 		max_events_to_send--;
-		_destroy_event_holder(event_holder);
+		_put_event_holder(event_holder);
 	}
-
-	result = events_sent;
 
 	esf_agent_put(agent);
 
-	return result;
+	int non_copied = copy_to_user(&events_arr->count, &events_sent,
+				      sizeof(events_arr));
+
+	if (non_copied) {
+		return -EFAULT;
+	}
+
+	return cur_buff_offset + sizeof(*events_arr);
 }
 
 static int _agent_fd_release(struct inode *inode, struct file *filp)
@@ -405,10 +435,26 @@ int esf_agent_enqueue_event(esf_agent_t *agent, esf_raw_event_t *raw_event,
 
 	list_add_tail(&holder->_node, &agent->events_queue);
 	agent->events_count++;
+	agent->events_notify_count++;
 
 	write_unlock(&agent->event_queue_lock);
 
-	wake_up_interruptible(&agent->events_queue_wq);
+	bool notify_by_timeout = (raw_event->event.header.timestamp -
+				  agent->events_last_notify) > 100;
+	bool notify_by_period = agent->events_notify_count % 100;
+	bool notify_controlled_event =
+		(raw_event->event.header.flags & ESF_EVENT_CAN_CONTROL) &&
+		esf_agent_want_control(agent, raw_event->event.header.type);
+
+	bool should_notify = notify_by_timeout || notify_by_period ||
+			     notify_controlled_event;
+
+	// todo: allow to set up this values via agent ctl / kernel cli
+	if (should_notify) {
+		agent->events_notify_count = 0;
+		agent->events_last_notify = raw_event->event.header.timestamp;
+		wake_up_interruptible(&agent->events_queue_wq);
+	}
 
 	return 0;
 }

@@ -7,12 +7,12 @@ userccflags += -I usr/include
 .PHONY: all clean
 
 all:
-	$(MAKE) -C ../.. samples/landlock/
+	$(MAKE) -C ../.. samples/esf/
 
 clean:
-	$(MAKE) -C ../.. M=samples/landlock/ clean
+	$(MAKE) -C ../.. M=samples/esf/ clean
 
-standalone: stasndalone-agent
+standalone: standalone-agent
 
-stasndalone-agent:
+standalone-agent: $(info $(shell realpath $$(pwd)) $(EXTRA_FLAGS))
 	gcc $(EXTRA_FLAGS) -g -ggdb -std=c11 ./agent.c -o agent
