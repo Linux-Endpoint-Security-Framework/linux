@@ -76,4 +76,6 @@ void esf_raw_event_remove_to_decision_wait_table(esf_raw_event_t *raw_event);
 esf_action_decision_t
 esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event);
 
+typedef uint64_t esf_agent_subscriptions_mask_t[_ESF_EVENT_CATEGORY_MAX + 1];
+
 #endif /* __LINUX_ESF_EVENT_H */

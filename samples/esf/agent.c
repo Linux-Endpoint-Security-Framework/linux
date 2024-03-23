@@ -6,13 +6,17 @@
 #include <string.h>
 #include <errno.h>
 #include <pthread.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include <sys/ioctl.h>
-#include <sys/epoll.h>
+#include <sys/poll.h>
 #include <sys/mman.h>
 #include <sys/user.h>
 
 #include <linux/esf/ctl.h>
+#include <sys/epoll.h>
+#include "strdefs.h"
 
 #define EPOLL_SIZE 256
 #define EPOLL_MAX_EVENTS 20
@@ -103,7 +107,7 @@ static inline esf_event_iterator_t esf_event_iterator_next(esf_event_iterator_t 
                  it = esf_event_iterator_next(it))\
 
 
-int esf_register_agent(int esf_fd) {
+int esf_open_register_agent(int esf_fd) {
     esf_ctl_register_agent_t register_agent = {
             .api_version = ESF_VERSION,
     };
@@ -114,14 +118,42 @@ int esf_register_agent(int esf_fd) {
     return agent_fd;
 }
 
-int esf_agent_subscribe(int agent_fd, esf_event_type_t event_type, esf_agent_ctl_subscribe_flags_t flags) {
-    esf_agent_log("subscribing to event type %d...", event_type);
-    esf_agent_ctl_subscribe_t subscribe_cmd = {
-            .event_type = event_type,
-            .flags = flags,
+int esf_agent_open_listen_channel(int agent_fd) {
+    esf_agent_ctl_open_listen_channel_t open_listen_chan_cmd = {
+            .api_version = ESF_VERSION
     };
 
-    return ioctl(agent_fd, ESF_AGENT_CTL_SUBSCRIBE, &subscribe_cmd);
+    int err = ioctl(agent_fd, ESF_AGENT_CTL_OPEN_LISTEN_CHANNEL, &open_listen_chan_cmd);
+
+    if (err) {
+        return -1;
+    }
+
+    return open_listen_chan_cmd.channel_fd;
+}
+
+int esf_agent_open_auth_channel(int agent_fd) {
+    esf_agent_ctl_open_auth_channel_t open_auth_chan_cmd = {
+            .api_version = ESF_VERSION
+    };
+
+    int err = ioctl(agent_fd, ESF_AGENT_CTL_OPEN_AUTH_CHANNEL, &open_auth_chan_cmd);
+
+    if (err) {
+        return -1;
+    }
+
+    return open_auth_chan_cmd.channel_fd;
+}
+
+
+int esf_agent_subscribe(int channel_fd, esf_event_type_t event_type) {
+    esf_agent_log("subscribing to event type %d (chan: %d)...", event_type, channel_fd);
+    esf_agent_ctl_subscribe_t subscribe_cmd = {
+            .event_type = event_type,
+    };
+
+    return ioctl(channel_fd, ESF_AGENT_CTL_SUBSCRIBE, &subscribe_cmd);
 }
 
 int esf_agent_activate(int agent_fd) {
@@ -234,6 +266,7 @@ print_elem_t *print_queue_pop(print_queue_t *pq) {
 }
 
 static bool _print_routine_should_run = true;
+static bool _decision_routine_should_run = true;
 
 void *_print_routine(void *arg) {
     print_queue_t *print_queue = arg;
@@ -247,8 +280,12 @@ void *_print_routine(void *arg) {
         char *parent_exe = esf_item_as_string(event, process.exe.path);
         char *parent_args = esf_item_as_string(event, process.args);
         char *parent_env = esf_item_as_string(event, process.env);
+        esf_event_flags_str_t flags = esf_event_flags_str(event->header.flags);
 
-        esf_agent_log("event [%llu] type: %d, data size: %llu {", event->header.id, event->header.type,
+        esf_agent_log("[%llu] %s:%d [%s], data size: %llu {", event->header.id,
+                      esf_event_type_name(event->header.type),
+                      event->header.type,
+                      flags.str,
                       event->data_size);
 
         esf_agent_log("\tparent { ");
@@ -296,18 +333,37 @@ void *_print_routine(void *arg) {
     return NULL;
 }
 
+void *_decision_routine(void *arg) {
+    return NULL;
+}
+
+#define POLL_MAX_EVENTS 1
+
 int main(int argc, char **argv) {
-    int epoll_fd = 0, esf_fd = 0, agent_fd = 0;
+    int esf_fd = 0, agent_fd = 0, err = 0;
     size_t buffer_size = PAGE_SIZE * 4096;
+    bool controller = false;
+
+    for (int i = 0; i < argc; ++i) {
+        int diff = strcmp(argv[i], "--controller");
+
+        if (diff == 0) {
+            esf_agent_log("running agent as controller");
+            controller = true;
+        }
+    }
+
     esf_events_t *esf_events_buff = malloc(buffer_size);
     mprotect(esf_events_buff, buffer_size, PROT_WRITE | PROT_READ);
 
-    pthread_t print_thread;
+    pthread_t print_thread, decision_thread;
     print_queue_t print_queue;
     memset(&print_queue, 0, sizeof(print_queue));
+    memset(&decision_thread, 0, sizeof(decision_thread));
 
     pthread_mutex_init(&print_queue.mtx, NULL);
-    int print_th = pthread_create(&print_thread, NULL, _print_routine, &print_queue);
+    __attribute_maybe_unused__ int print_th = pthread_create(&print_thread, NULL, _print_routine, &print_queue);
+    __attribute_maybe_unused__ int decision_th = pthread_create(&decision_thread, NULL, _decision_routine, NULL);
 
     struct winsize w;
     ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
@@ -315,65 +371,76 @@ int main(int argc, char **argv) {
     _win_width = w.ws_col > _win_width_res + 1 ? w.ws_col : _win_width_res;
 
     esf_fd = open("/dev/esf", O_RDWR);
-    struct epoll_event ev, events[EPOLL_MAX_EVENTS];
-    int error;
 
     if (esf_fd < 0) {
         esf_agent_err("esf device");
-        error = esf_fd;
-        goto out;
+        err = esf_fd;
+        goto out_join;
     }
 
-    agent_fd = esf_register_agent(esf_fd);
+    agent_fd = esf_open_register_agent(esf_fd);
 
     if (agent_fd < 0) {
-        esf_agent_err("esf_register_agent");
-        error = agent_fd;
-        goto out;
+        esf_agent_err("esf_open_register_agent");
+        err = agent_fd;
+        goto out_join;
     }
 
-    epoll_fd = epoll_create(EPOLL_SIZE);
+    int chan_fd = -1;
 
-    if (epoll_fd < 0) {
-        esf_agent_err("epoll_create");
-        error = epoll_fd;
-        goto out;
+    if (controller) {
+        chan_fd = esf_agent_open_listen_channel(agent_fd);
+    } else {
+        chan_fd = esf_agent_open_auth_channel(agent_fd);
     }
 
-    ev.data.fd = agent_fd;
-    ev.events = EPOLLIN;
-
-    error = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, agent_fd, &ev);
-
-    if (error) {
-        esf_agent_err("epoll_ctl");
-        goto out;
+    if (chan_fd < 0) {
+        esf_agent_err("esf_agent_open_%s_channel", controller ? "auth" : "listen");
+        err = errno;
+        goto out_join;
     }
 
-    error |= esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION, ESF_SUBSCRIBE_AS_CONTROLLER);
-    error |= esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_PROCESS_EXITED, ESF_SUBSCRIBE_NONE);
-    error |= esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_FILE_OPEN, ESF_SUBSCRIBE_NONE);
-    error |= esf_agent_subscribe(agent_fd, ESF_EVENT_TYPE_FILE_TRUNCATE, ESF_SUBSCRIBE_NONE);
+    err = esf_agent_subscribe(chan_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION);
 
-    if (error) {
+    if (err) {
         esf_agent_err("esf_agent_subscribe");
-        goto out;
+        goto out_join;
     }
 
-    error = esf_agent_activate(agent_fd);
+    int polling_fd = epoll_create(0xABBA);
 
-    if (error) {
+    if (polling_fd < 0) {
+        esf_agent_err("epoll_create");
+        err = errno;
+        goto out_join;
+    }
+
+    struct epoll_event chan_poll_event = {0};
+
+    chan_poll_event.data.fd = chan_fd;
+    chan_poll_event.events = EPOLLIN;
+
+    if (epoll_ctl(polling_fd, EPOLL_CTL_ADD, chan_fd, &chan_poll_event) != 0) {
+        esf_agent_err("epoll_ctl");
+        err = errno;
+        goto out_join;
+    }
+
+    err = esf_agent_activate(agent_fd);
+
+    if (err) {
         esf_agent_err("esf_agent_activate");
-        goto out;
+        goto out_join;
     }
+
+    struct epoll_event poll_events[POLL_MAX_EVENTS];
 
     while (true) {
-        int wait_result = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, 1000);
+        int wait_result = epoll_wait(polling_fd, poll_events, POLL_MAX_EVENTS, 1000);
 
         if (wait_result < 0) {
-            esf_agent_err("epoll_wait");
-            error = wait_result;
-            goto out;
+            err = errno;
+            goto out_join;
         }
 
         if (wait_result == 0) {
@@ -381,18 +448,20 @@ int main(int argc, char **argv) {
         }
 
         for (int i = 0; i < wait_result; ++i) {
-            if ((events[i].events & EPOLLIN) != EPOLLIN) {
+            struct epoll_event poll_event = poll_events[i];
+
+            if (!(poll_event.events & POLLIN)) {
                 continue;
             }
 
-            long bytes_read = read(events[i].data.fd, esf_events_buff, buffer_size);
+            long bytes_read = read(poll_event.data.fd, esf_events_buff, buffer_size);
 
             if (bytes_read <= 0) {
-                error = errno;
-                goto out;
+                err = errno;
+                goto out_join;
             }
 
-            esf_agent_log("accepted %llu events (read: %ld bytes)", esf_events_buff->count, bytes_read);
+            esf_agent_log("accepted %llu events on poll %d (read: %ld bytes)", esf_events_buff->count, i, bytes_read);
 
             for_each_esf_event(esf_events_buff, it) {
                 const esf_event_t *event = esf_event_iterator_get_event(it);
@@ -413,14 +482,16 @@ int main(int argc, char **argv) {
         }
     }
 
-    out:
+    out_join:
     _print_routine_should_run = false;
+    _decision_routine_should_run = false;
+
     pthread_join(print_thread, NULL);
+    pthread_join(decision_thread, NULL);
 
     pthread_mutex_destroy(&print_queue.mtx);
 
     if (agent_fd > 0) { close(agent_fd); }
-    if (epoll_fd > 0) { close(agent_fd); }
 
-    return error;
+    return err;
 }

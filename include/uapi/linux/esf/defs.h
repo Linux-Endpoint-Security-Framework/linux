@@ -45,10 +45,15 @@ typedef struct esf_item {
 	esf_item_type_t item_type;
 } esf_item_t;
 
+#define __ESF_BIT_FIELD(n) (1 << n)
+
 typedef enum esf_event_flags {
 	ESF_EVENT_SIMPLE = 0,
-	ESF_EVENT_CAN_CONTROL = 1 << 0,
-	ESF_EVENT_QUERYABLE = 1 << 0
+	ESF_EVENT_CAN_CONTROL = __ESF_BIT_FIELD(0),
+	ESF_EVENT_QUERYABLE = __ESF_BIT_FIELD(1),
+	ESF_EVENT_WAITS_FOR_AUTH = __ESF_BIT_FIELD(2),
+	ESF_EVENT_AUTHORIZED = __ESF_BIT_FIELD(3),
+	ESF_EVENT_DENIED = __ESF_BIT_FIELD(4),
 } esf_event_flags_t;
 
 #define __ESF_EVENT_CATEGORY_BASE 100ULL

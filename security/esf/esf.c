@@ -28,7 +28,7 @@ static struct {
 	uint32_t agents_count;
 	struct list_head agents;
 	// summary mask for all subscriptions, can be updated via esf_update_active_subscriptions_mask
-	esf_agent_subscriptions_mask agents_subscriptions;
+	esf_agent_subscriptions_mask_t agents_subscriptions;
 } __randomize_layout _context;
 
 void esf_update_active_subscriptions_mask(void)
@@ -50,10 +50,8 @@ void esf_update_active_subscriptions_mask(void)
 			continue;
 		}
 
-		for (int i = 0; i < _ESF_EVENT_CATEGORY_MAX; ++i) {
-			_context.agents_subscriptions[i] |=
-				agent->subscriptions[i];
-		}
+		esf_agent_combine_subscriptions(agent,
+						&_context.agents_subscriptions);
 	}
 
 	esf_bitmask_buff_64_t mask_buff = { 0 };
@@ -93,7 +91,7 @@ int esf_unregister_agent(esf_agent_t *agent)
 	agent->flags &= ~ESF_AGENT_ACTIVE;
 
 	esf_log_info("Unregistering agent %d (%d)", agent->task->tgid,
-		     agent->fd);
+		     agent->control_fd);
 
 	write_lock_irqsave(&_context.agents_lock, irq_flags);
 	list_del(&agent->_node);
@@ -164,16 +162,19 @@ int esf_submit_raw_event_ex(esf_raw_event_t *raw_event, gfp_t gfp,
 			    esf_submit_flags_t flags)
 {
 	esf_agent_t *agent = NULL;
-	int agents_want_control = 0;
 	esf_action_decision_t decision = ESF_ACTION_DECISION_ALLOW;
 
 	BUG_ON(!raw_event);
 
 	esf_raw_event_get(raw_event);
 
-	int receivers_num = 0;
-	esf_agent_t *receiver_agents[CONFIG_SECURITY_ESF_MAX_AGENTS];
-	memset(receiver_agents, 0, sizeof(receiver_agents));
+	int listeners_num = 0;
+	esf_agent_t *listener_agents[CONFIG_SECURITY_ESF_MAX_AGENTS];
+	memset(listener_agents, 0, sizeof(listener_agents));
+
+	int authorizers_num = 0;
+	esf_agent_t *auth_agents[CONFIG_SECURITY_ESF_MAX_AGENTS];
+	memset(auth_agents, 0, sizeof(listener_agents));
 
 	read_lock(&_context.agents_lock);
 
@@ -186,23 +187,20 @@ int esf_submit_raw_event_ex(esf_raw_event_t *raw_event, gfp_t gfp,
 		}
 
 		// agent is not subscribed to this event type, do not send event to this one
-		if (!esf_agent_is_subscribed_to(agent,
-						raw_event->event.header.type)) {
-			goto put_agent;
+		if (esf_agent_listens_to(agent, raw_event->event.header.type)) {
+			// agent active and subscribed to this event type, write to broadcast
+			// table and ref up agnet (will be putted after sending event)
+			listener_agents[listeners_num] = agent;
+			listeners_num++;
+			esf_agent_get(agent);
 		}
 
-		// agent active and subscribed to this event type, write to broadcast
-		// table ref up (will be putted after sending event)
-		receiver_agents[receivers_num] = agent;
-		receivers_num++;
-		esf_agent_get(agent);
-
-		// if this event can be controlled by this agent and agent
-		// also wants to control this event increment want control counter
-		if ((raw_event->event.header.flags & ESF_EVENT_CAN_CONTROL) &&
-		    esf_agent_want_control(agent,
-					   raw_event->event.header.type)) {
-			agents_want_control++;
+		if (esf_agent_authorizes(agent, raw_event->event.header.type) &&
+		    (raw_event->event.header.flags & ESF_EVENT_CAN_CONTROL)) {
+			// agent active and can authorize this event
+			auth_agents[authorizers_num] = agent;
+			authorizers_num++;
+			esf_agent_get(agent);
 		}
 
 put_agent:
@@ -211,36 +209,62 @@ put_agent:
 
 	read_unlock(&_context.agents_lock);
 
-	// broadcast event to all agents want to receive this one
-	for (int i = 0; i < receivers_num; i++) {
-		esf_agent_t *receiver_agent = receiver_agents[i];
-		esf_agent_enqueue_event(receiver_agent, raw_event, gfp);
-		esf_agent_put(receiver_agent);
+	// authorizers more than 0, set want to auth flag
+	if (authorizers_num > 0) {
+		raw_event->event.header.flags |= ESF_EVENT_WAITS_FOR_AUTH;
 	}
 
-	if (agents_want_control == 0 &&
-	    raw_event->event.header.flags & ESF_EVENT_CAN_CONTROL) {
+	// broadcast event to all agents want to authorize this one
+	for (int i = 0; i < authorizers_num; i++) {
+		esf_agent_t *auth_agent = auth_agents[i];
+		esf_agent_enqueue_event(auth_agent, raw_event, gfp);
+		esf_agent_put(auth_agent);
+	}
+
 #ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
+	if (authorizers_num == 0 &&
+	    raw_event->event.header.flags & ESF_EVENT_CAN_CONTROL) {
 		esf_log_debug("Nobody want control " RAW_EVENT_FMT_STR,
 			      RAW_EVENT_FMT(raw_event));
-#endif
 	}
+#endif
 
 	// if any at least one agent want to control this event, we should
 	// wait for decision from all agents
-	if (agents_want_control > 0 && (flags & ESF_SUBMIT_WAIT_FOR_DECISION)) {
+	if (authorizers_num > 0 && (flags & ESF_SUBMIT_WAIT_FOR_DECISION)) {
 #ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
 		esf_log_debug("%d agents want control " RAW_EVENT_FMT_STR,
-			      agents_want_control, RAW_EVENT_FMT(raw_event));
+			      authorizers_num, RAW_EVENT_FMT(raw_event));
 #endif
 
 		// add this event to wait table with calculated
 		// amount of agents which will make decision
 		esf_raw_event_add_to_decision_wait_table(raw_event,
-							 agents_want_control);
+							 authorizers_num);
 
 		// and finally wait for decision
 		decision = esf_raw_event_wait_for_decision(raw_event);
+
+		// decision made at this point, unset waits for auth flag
+		raw_event->event.header.flags &= ~ESF_EVENT_WAITS_FOR_AUTH;
+		raw_event->event.header.flags &= ~ESF_EVENT_CAN_CONTROL;
+
+		// and set corresponding decision flag
+		if (decision == ESF_ACTION_DECISION_ALLOW) {
+			raw_event->event.header.flags |= ESF_EVENT_AUTHORIZED;
+		} else {
+			raw_event->event.header.flags |= ESF_EVENT_DENIED;
+		}
+	} else {
+		raw_event->event.header.flags &= ~ESF_EVENT_CAN_CONTROL;
+		raw_event->event.header.flags |= ESF_EVENT_AUTHORIZED;
+	}
+
+	// broadcast event to all agents want to listen to this one
+	for (int i = 0; i < listeners_num; i++) {
+		esf_agent_t *listener_agent = listener_agents[i];
+		esf_agent_enqueue_event(listener_agent, raw_event, gfp);
+		esf_agent_put(listener_agent);
 	}
 
 	esf_raw_event_put(raw_event);
@@ -253,34 +277,23 @@ int esf_submit_raw_event(esf_raw_event_t *raw_event, gfp_t gfp)
 	return esf_submit_raw_event_ex(raw_event, gfp, ESF_SUBMIT_SIMPLE);
 }
 
-static long _esf_signature_verify(struct task_struct *agent_task,
-				  esf_ctl_register_agent_t *register_cmd)
+static long _esf_signature_verify(struct task_struct *agent_task)
 {
 	// todo: implement signature versification
 	esf_log_warn("Agent signature verification is currently unsupported");
 	return 0;
 }
 
-static long _do_esf_register_agent_ioctl(struct task_struct *agent_task,
-					 esf_ctl_register_agent_t *register_cmd)
+int _do_esf_register_agent_ioctl(struct task_struct *agent_task,
+				 esf_ctl_register_agent_t *register_cmd)
 {
-	long err = 0;
 	esf_agent_t *new_agent = NULL;
+	int err;
 
-	if (register_cmd->api_version != ESF_VERSION) {
-		esf_log_err(
-			"Agent %d registration avoided because of incompatible API version",
-			agent_task->tgid);
-		err = -EFAULT;
+	err = _esf_signature_verify(agent_task);
+
+	if (err) {
 		goto out;
-	}
-
-	if (verify_sig) {
-		err = _esf_signature_verify(agent_task, register_cmd);
-
-		if (err) {
-			goto out;
-		}
 	}
 
 	new_agent = esf_agent_create(agent_task, GFP_KERNEL);
@@ -298,7 +311,7 @@ out:
 	}
 
 	// error or file descriptor
-	return err ? err : new_agent->fd;
+	return err ? err : new_agent->control_fd;
 }
 
 long _esf_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)

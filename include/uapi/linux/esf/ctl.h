@@ -18,14 +18,8 @@
 
 #include "defs.h"
 
-typedef enum esf_agent_ctl_subscribe_flags {
-	ESF_SUBSCRIBE_NONE = 0,
-	ESF_SUBSCRIBE_AS_CONTROLLER = 1 << 0
-} esf_agent_ctl_subscribe_flags_t;
-
 typedef struct esf_agent_ctl_subscribe {
 	esf_event_type_t event_type;
-	esf_agent_ctl_subscribe_flags_t flags;
 } esf_agent_ctl_subscribe_t;
 
 typedef struct esf_agent_ctl_activate {
@@ -36,9 +30,23 @@ typedef struct esf_agent_ctl_decide {
 	esf_action_decision_t decision;
 } esf_agent_ctl_decide_t;
 
-#define ESF_AGENT_CTL_SUBSCRIBE _IOR('a', 0x0, esf_agent_ctl_subscribe_t)
-#define ESF_AGENT_CTL_ACTIVATE _IOR('a', 0x5, esf_agent_ctl_activate_t)
-#define ESF_AGENT_CTL_DECIDE _IOR('a', 0x10, esf_agent_ctl_decide_t)
+typedef struct esf_agent_ctl_open_listen_channel {
+	esf_version api_version;
+	int channel_fd;
+} esf_agent_ctl_open_listen_channel_t;
+
+typedef struct esf_agent_ctl_open_auth_channel {
+	esf_version api_version;
+	int channel_fd;
+} esf_agent_ctl_open_auth_channel_t;
+
+#define ESF_AGENT_CTL_SUBSCRIBE _IOW('a', 0x0, esf_agent_ctl_subscribe_t)
+#define ESF_AGENT_CTL_ACTIVATE _IOW('a', 0x5, esf_agent_ctl_activate_t)
+#define ESF_AGENT_CTL_DECIDE _IOW('a', 0x10, esf_agent_ctl_decide_t)
+#define ESF_AGENT_CTL_OPEN_LISTEN_CHANNEL \
+	_IOWR('a', 0x11, esf_agent_ctl_open_listen_channel_t)
+#define ESF_AGENT_CTL_OPEN_AUTH_CHANNEL \
+	_IOWR('a', 0x12, esf_agent_ctl_open_auth_channel_t)
 
 typedef struct esf_ctl_get_subsystem_info {
 	esf_version api_version;
@@ -49,6 +57,6 @@ typedef struct esf_ctl_register_agent {
 } esf_ctl_register_agent_t;
 
 #define ESF_CTL_GET_SUBSYSTEM_INFO _IOR('a', 0x40, esf_ctl_get_subsystem_info_t)
-#define ESF_CTL_REGISTER_AGENT _IOR('a', 0x41, esf_ctl_register_agent_t)
+#define ESF_CTL_REGISTER_AGENT _IOR('a', 0x42, esf_ctl_register_agent_t)
 
 #endif /* _LINUX_ESF_CTL_H */

@@ -49,19 +49,17 @@ esf_raw_item_t *_esf_raw_item_create(esf_item_t *__owned item, void *data,
 		// with zero at end
 		item_size += 1;
 
-		raw_item->data = kmalloc(item_size, gfp);
+		raw_item->data = kzalloc(item_size, gfp);
 
 		if (!raw_item->data) {
 			_efs_raw_item_free(raw_item);
 			return NULL;
 		}
 
-		if (copy_func(raw_item->data, data, item_size) != 0) {
+		if (copy_func(raw_item->data, data, data_size) != 0) {
 			_efs_raw_item_free(raw_item);
 			return NULL;
 		}
-
-		((char *)raw_item->data)[item_size] = '\0';
 	} else {
 		// memory will be just moved, so keep data size as passed to func
 		raw_item->data = data;
@@ -146,6 +144,8 @@ esf_raw_event_t *esf_raw_event_create(esf_event_type_t type,
 
 void _esf_raw_event_destroy(esf_raw_event_t *raw_event)
 {
+	esf_raw_event_remove_to_decision_wait_table(raw_event);
+
 	esf_raw_item_t *raw_item = NULL;
 	esf_raw_item_t *raw_item_tmp = NULL;
 

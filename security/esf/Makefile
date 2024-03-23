@@ -5,6 +5,8 @@ obj-$(CONFIG_SECURITY_ESF) += \
 	agent.o \
 	hooks.o \
 	event.o \
+	events_queue.o \
+	events_channel.o \
 	hooks/process.o \
 	hooks/file.o \
 	hooks/fs.o \
