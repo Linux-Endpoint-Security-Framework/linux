@@ -5,24 +5,30 @@
 #include <linux/slab.h>
 #include <linux/fs.h>
 #include <linux/anon_inodes.h>
-#include <linux/poll.h>
 #include <linux/esf/ctl.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
 
 typedef enum {
-	AGENT_CHANNEL_WAKEUP_POLICY_PERIOD,
-	AGENT_CHANNEL_WAKEUP_POLICY_EACH,
-} _agent_channel_wakeup_policy;
+	AGENT_LISTEN_CHANNEL_BEHAVIOUR_POLICY,
+	AGENT_AUTH_CHANNEL_BEHAVIOUR_POLICY,
+} _agent_channel_behaviour_policy;
 
 typedef struct _agent_channel_private_data {
 	esf_events_channel_t **agent_channel_ptr;
 	esf_agent_t *agent;
-	_agent_channel_wakeup_policy wakeup_policy;
+	_agent_channel_behaviour_policy policy;
 
-	uint64_t wake_up_period;
-	uint64_t wake_up_period_ms;
-	struct task_struct *channel_alarm;
+	/* data for policies */
+	union {
+		struct {
+			uint64_t wake_up_period;
+			uint64_t wake_up_period_ms;
+			struct task_struct *channel_alarm;
+		} listen;
+		struct {
+		} auth;
+	} behaviour;
 } _agent_channel_private_data_t;
 
 static bool _agent_chan_wakeup(struct esf_events_channel *chan,
@@ -30,11 +36,11 @@ static bool _agent_chan_wakeup(struct esf_events_channel *chan,
 {
 	_agent_channel_private_data_t *dat = chan->private;
 
-	switch (dat->wakeup_policy) {
-	case AGENT_CHANNEL_WAKEUP_POLICY_PERIOD: {
-		return (event_nr % dat->wake_up_period) == 0;
+	switch (dat->policy) {
+	case AGENT_LISTEN_CHANNEL_BEHAVIOUR_POLICY: {
+		return (event_nr % dat->behaviour.listen.wake_up_period) == 0;
 	}
-	case AGENT_CHANNEL_WAKEUP_POLICY_EACH: {
+	case AGENT_AUTH_CHANNEL_BEHAVIOUR_POLICY: {
 		return true;
 	}
 	}
@@ -46,16 +52,22 @@ static int _agent_chan_release(struct esf_events_channel *chan)
 {
 	_agent_channel_private_data_t *data = chan->private;
 
-	if (data->channel_alarm) {
-		kthread_stop(data->channel_alarm);
+	BUG_ON(!data);
+	BUG_ON(!data->agent_channel_ptr);
+
+	if (data->policy == AGENT_LISTEN_CHANNEL_BEHAVIOUR_POLICY &&
+	    data->behaviour.listen.channel_alarm) {
+		kthread_stop(data->behaviour.listen.channel_alarm);
 	}
 
 	// just zero field at agent holder, channel will deinitialize self
-	data->agent_channel_ptr = NULL;
+	*data->agent_channel_ptr = NULL;
+
+	kfree(data);
 	return 0;
 }
 
-static esf_events_channel_fops_t _agent_events_chan_fops = {
+static const esf_events_channel_fops_t _agent_events_chan_fops = {
 	.want_wakeup = _agent_chan_wakeup,
 	.release = _agent_chan_release,
 };
@@ -84,12 +96,12 @@ static long _do_agent_open_auth_channel_ioctl(
 		return -ENOMEM;
 	}
 
-	dat->wakeup_policy = AGENT_CHANNEL_WAKEUP_POLICY_EACH;
+	dat->policy = AGENT_AUTH_CHANNEL_BEHAVIOUR_POLICY;
 	dat->agent = agent;
 	dat->agent_channel_ptr = &agent->_auth_channel;
 
 	esf_events_channel_t *chan = esf_events_channel_create(
-		"[esf:auth]", &_agent_events_chan_fops, dat);
+		agent->task, "[esf:auth]", &_agent_events_chan_fops, dat);
 
 	if (IS_ERR_OR_NULL(chan)) {
 		kfree(dat);
@@ -106,11 +118,12 @@ static int _events_flusher(void *data)
 {
 	_agent_channel_private_data_t *dat = data;
 
-	while (kthread_should_stop()) {
+	while (!kthread_should_stop()) {
 		esf_events_channel_t *chan = *dat->agent_channel_ptr;
 
 		// not valid channel
 		if (!chan) {
+			esf_log_warn("Events channel is NULL");
 			break;
 		}
 
@@ -124,6 +137,8 @@ static int _events_flusher(void *data)
 
 		msleep_interruptible(100);
 	}
+
+	esf_log_warn("Flusher stopped");
 
 	return 0;
 }
@@ -143,14 +158,14 @@ static long _do_agent_open_listen_channel_ioctl(
 		return -ENOMEM;
 	}
 
-	dat->wakeup_policy = AGENT_CHANNEL_WAKEUP_POLICY_PERIOD;
+	dat->policy = AGENT_LISTEN_CHANNEL_BEHAVIOUR_POLICY;
 	dat->agent = agent;
 	dat->agent_channel_ptr = &agent->_listen_channel;
-	dat->wake_up_period = 100;
-	dat->wake_up_period_ms = 100;
+	dat->behaviour.listen.wake_up_period = 100;
+	dat->behaviour.listen.wake_up_period_ms = 100;
 
 	esf_events_channel_t *chan = esf_events_channel_create(
-		"[esf:listen]", &_agent_events_chan_fops, dat);
+		agent->task, "[esf:listen]", &_agent_events_chan_fops, dat);
 
 	if (IS_ERR_OR_NULL(chan)) {
 		return PTR_ERR(chan);
@@ -159,9 +174,9 @@ static long _do_agent_open_listen_channel_ioctl(
 	agent->_listen_channel = chan;
 	open_listen_channel->channel_fd = chan->fd;
 
-	dat->channel_alarm = kthread_run(_events_flusher, dat,
-					 "esf_alarm[%d:%d]", agent->task->tgid,
-					 chan->fd);
+	dat->behaviour.listen.channel_alarm =
+		kthread_run(_events_flusher, dat, "esf_alarm[%d:%d]",
+			    agent->task->tgid, chan->fd);
 
 	return 0;
 }
@@ -367,32 +382,34 @@ int esf_agent_enqueue_event(esf_agent_t *agent, esf_raw_event_t *raw_event,
 	return 0;
 }
 
-noinline bool esf_agent_authorizes(const esf_agent_t *agent,
-				   esf_event_type_t event_type)
+static bool _is_subscribed(esf_agent_subscriptions_mask_t mask,
+			   esf_event_type_t event_type)
 {
 	esf_event_category_t category = ESF_EVENT_CATEGORY_NR(event_type);
 	uint64_t event_mask = ESF_EVENT_TYPE_MASK(event_type);
+	BUG_ON(category >= _ESF_EVENT_CATEGORY_MAX);
+	return (mask[category] & event_mask);
+}
 
+noinline bool esf_agent_authorizes(const esf_agent_t *agent,
+				   esf_event_type_t event_type)
+{
 	if (!agent->_auth_channel) {
 		return false;
 	}
 
-	BUG_ON(category >= _ESF_EVENT_CATEGORY_MAX);
-	return (agent->_auth_channel->subscriptions[category] & event_mask);
+	return _is_subscribed(agent->_auth_channel->subscriptions, event_type);
 }
 
 noinline bool esf_agent_listens_to(const esf_agent_t *agent,
 				   esf_event_type_t event_type)
 {
-	esf_event_category_t category = ESF_EVENT_CATEGORY_NR(event_type);
-	uint64_t event_mask = ESF_EVENT_TYPE_MASK(event_type);
-
 	if (!agent->_listen_channel) {
 		return false;
 	}
 
-	BUG_ON(category >= _ESF_EVENT_CATEGORY_MAX);
-	return (agent->_listen_channel->subscriptions[category] & event_mask);
+	return _is_subscribed(agent->_listen_channel->subscriptions,
+			      event_type);
 }
 
 void esf_agent_get_subscriptions(const esf_agent_t *agent,

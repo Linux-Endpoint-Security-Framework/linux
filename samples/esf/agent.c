@@ -147,13 +147,13 @@ int esf_agent_open_auth_channel(int agent_fd) {
 }
 
 
-int esf_agent_subscribe(int channel_fd, esf_event_type_t event_type) {
+int esf_event_subscribe(int channel_fd, esf_event_type_t event_type) {
     esf_agent_log("subscribing to event type %d (chan: %d)...", event_type, channel_fd);
-    esf_agent_ctl_subscribe_t subscribe_cmd = {
+    esf_events_chan_ctl_subscribe_t subscribe_cmd = {
             .event_type = event_type,
     };
 
-    return ioctl(channel_fd, ESF_AGENT_CTL_SUBSCRIBE, &subscribe_cmd);
+    return ioctl(channel_fd, ESF_EVENTS_CHAN_CTL_SUBSCRIBE, &subscribe_cmd);
 }
 
 int esf_agent_activate(int agent_fd) {
@@ -337,7 +337,7 @@ void *_decision_routine(void *arg) {
     return NULL;
 }
 
-#define POLL_MAX_EVENTS 1
+#define POLL_MAX_EVENTS 20
 
 int main(int argc, char **argv) {
     int esf_fd = 0, agent_fd = 0, err = 0;
@@ -389,9 +389,9 @@ int main(int argc, char **argv) {
     int chan_fd = -1;
 
     if (controller) {
-        chan_fd = esf_agent_open_listen_channel(agent_fd);
-    } else {
         chan_fd = esf_agent_open_auth_channel(agent_fd);
+    } else {
+        chan_fd = esf_agent_open_listen_channel(agent_fd);
     }
 
     if (chan_fd < 0) {
@@ -400,10 +400,10 @@ int main(int argc, char **argv) {
         goto out_join;
     }
 
-    err = esf_agent_subscribe(chan_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION);
+    err = esf_event_subscribe(chan_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION);
 
     if (err) {
-        esf_agent_err("esf_agent_subscribe");
+        esf_agent_err("esf_event_subscribe");
         goto out_join;
     }
 

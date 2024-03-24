@@ -129,6 +129,8 @@ esf_raw_event_t *esf_raw_event_create(esf_event_type_t type,
 
 	INIT_HLIST_NODE(&raw_event->_hnode);
 	raw_event->decision = ESF_ACTION_DECISION_ALLOW;
+	init_completion(&raw_event->__read_completion);
+	atomic_set(&raw_event->__reads_left, 0);
 	init_completion(&raw_event->decisions_completion);
 	atomic_set(&raw_event->decisions_left, 0);
 	INIT_LIST_HEAD(&raw_event->raw_items);
@@ -297,6 +299,44 @@ int esf_event_id_make_decision(esf_event_id event_id,
 	return found ? 0 : -ENOENT;
 }
 
+int esf_raw_event_notify_read(esf_raw_event_t *raw_event)
+{
+	// notify on each read until
+	if (!atomic_dec_and_test(&raw_event->__reads_left)) {
+		complete_all(&raw_event->__read_completion);
+	}
+
+	return 0;
+}
+
+#define _ESF_EVENT_READ_TIMEOUT_MS 2000
+#define _ESF_EVENT_DECISION_TIMEOUT_MS 500
+
+static int _esf_raw_event_wait_for_one_read(esf_raw_event_t *raw_event,
+					    int reads_count)
+{
+	atomic_set(&raw_event->__reads_left, reads_count);
+
+	uint64_t read_timeout =
+		msecs_to_jiffies(_ESF_EVENT_READ_TIMEOUT_MS);
+
+	uint64_t till_read_timeout = wait_for_completion_interruptible_timeout(
+		&raw_event->decisions_completion, read_timeout);
+
+#ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
+	if (till_read_timeout == 0) {
+		esf_log_debug_err("Waiting for " RAW_EVENT_FMT_STR
+				  " read timed out",
+				  RAW_EVENT_FMT(raw_event));
+	} else {
+		esf_log_debug("Event " RAW_EVENT_FMT_STR "read",
+			      RAW_EVENT_FMT(raw_event));
+	}
+#endif
+
+	return till_read_timeout;
+}
+
 void esf_raw_event_add_to_decision_wait_table(esf_raw_event_t *raw_event,
 					      int waiters_count)
 {
@@ -323,8 +363,6 @@ void esf_raw_event_remove_to_decision_wait_table(esf_raw_event_t *raw_event)
 	esf_raw_event_put(raw_event);
 }
 
-#define _ESF_EVENT_DECISION_TIMEOUT_MS 500
-
 /*!
  * esf_raw_event_wait_for_decision() waits for event decision
  * and removes raw_event from wait table
@@ -346,12 +384,21 @@ esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event)
 		goto out;
 	}
 
-#ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
-	uint64_t timeout = msecs_to_jiffies(_ESF_EVENT_DECISION_TIMEOUT_MS);
-	uint64_t till_timeout = wait_for_completion_timeout(
-		&raw_event->decisions_completion, timeout);
+	uint64_t till_read_timeout = _esf_raw_event_wait_for_one_read(
+		raw_event, atomic_read(&raw_event->decisions_left));
 
-	if (till_timeout == 0) {
+	if (till_read_timeout <= 0) {
+		goto out_remove_from_table;
+	}
+
+	uint64_t decision_timeout =
+		msecs_to_jiffies(_ESF_EVENT_DECISION_TIMEOUT_MS);
+	uint64_t till_decision_timeout =
+		wait_for_completion_interruptible_timeout(
+			&raw_event->decisions_completion, decision_timeout);
+
+#ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
+	if (till_decision_timeout == 0) {
 		esf_log_debug_err("Waiting for " RAW_EVENT_FMT_STR
 				  " decision timed out",
 				  RAW_EVENT_FMT(raw_event));
@@ -361,11 +408,14 @@ esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event)
 			RAW_EVENT_FMT(raw_event),
 			final_decision == ESF_ACTION_DECISION_ALLOW ? "allow" :
 								      "deny",
-			jiffies_to_msecs(timeout - till_timeout));
+			jiffies_to_msecs(decision_timeout -
+					 till_decision_timeout));
 	}
 #endif
 
 	final_decision = raw_event->decision;
+
+out_remove_from_table:
 	esf_raw_event_remove_to_decision_wait_table(raw_event);
 
 out:

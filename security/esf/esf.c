@@ -178,6 +178,7 @@ int esf_submit_raw_event_ex(esf_raw_event_t *raw_event, gfp_t gfp,
 
 	read_lock(&_context.agents_lock);
 
+	// collecting info about agents
 	list_for_each_entry(agent, &_context.agents, _node) {
 		esf_agent_get(agent);
 
@@ -209,7 +210,7 @@ put_agent:
 
 	read_unlock(&_context.agents_lock);
 
-	// authorizers more than 0, set want to auth flag
+	// authorizers more than 0, set waits to auth flag to event
 	if (authorizers_num > 0) {
 		raw_event->event.header.flags |= ESF_EVENT_WAITS_FOR_AUTH;
 	}

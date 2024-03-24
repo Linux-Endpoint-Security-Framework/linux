@@ -22,14 +22,16 @@ static struct file_operations _events_chann_fd_fops = {
 
 static void _esf_events_channel_destroy(esf_events_channel_t *channel)
 {
-	esf_log_debug("Destroying event channel, fd: %d", channel->fd);
-	esf_event_queue_deinit(&channel->events_queue);
+	esf_log_debug("Destroying event channel, " ESF_EVENTS_CHAN_FMT_STR,
+		      ESF_EVENTS_CHAN_FMT(channel));
+
+	esf_events_queue_deinit(&channel->events_queue);
 	kfree(channel);
 }
 
-static long
-_do_agent_subscribe_ioctl(esf_events_channel_t *channel,
-			  const esf_agent_ctl_subscribe_t *subscribe_cmd)
+static long _do_events_chan_subscribe_ioctl(
+	esf_events_channel_t *channel,
+	const esf_events_chan_ctl_subscribe_t *subscribe_cmd)
 {
 	esf_event_category_t category =
 		ESF_EVENT_CATEGORY_NR(subscribe_cmd->event_type);
@@ -40,8 +42,11 @@ _do_agent_subscribe_ioctl(esf_events_channel_t *channel,
 		return -ENOPARAM;
 	}
 
-	esf_log_debug("Agent %d is listening for nr:%d, chan: %d",
-		      current->tgid, subscribe_cmd->event_type, channel->fd);
+	esf_log_debug(
+		"Agent %d is listening for nr:%d, chan: " ESF_EVENTS_CHAN_FMT_STR,
+		current->tgid, subscribe_cmd->event_type,
+		ESF_EVENTS_CHAN_FMT(channel));
+
 	channel->subscriptions[category] |= event_mask;
 
 	return 0;
@@ -52,16 +57,16 @@ static long _events_chann_ioctl(struct file *f, unsigned int cmd,
 {
 	long res = 0;
 	switch (cmd) {
-	case ESF_AGENT_CTL_SUBSCRIBE: {
-		esf_agent_ctl_subscribe_t subscribe_cmd;
+	case ESF_EVENTS_CHAN_CTL_SUBSCRIBE: {
+		esf_events_chan_ctl_subscribe_t subscribe_cmd;
 		if (copy_from_user(&subscribe_cmd, (const void *)arg,
 				   sizeof(subscribe_cmd)) > 0) {
 			res = -EFAULT;
 			goto out;
 		}
 
-		res = _do_agent_subscribe_ioctl(f->private_data,
-						&subscribe_cmd);
+		res = _do_events_chan_subscribe_ioctl(f->private_data,
+						      &subscribe_cmd);
 	} break;
 	default:
 		res = -ENOIOCTLCMD;
@@ -95,7 +100,7 @@ static __poll_t _events_chann_fd_poll(struct file *filp,
 
 	poll_wait(filp, &channel->wq, pollt);
 
-	size_t queue_size = esf_event_queue_size(&channel->events_queue);
+	size_t queue_size = esf_events_queue_size(&channel->events_queue);
 
 	if (queue_size > 0) {
 		esf_log_debug("Polled %zu events from %d", queue_size,
@@ -180,7 +185,7 @@ out:
 	return err;
 }
 
-static ssize_t _events_chann_fd_read(struct file *filp, char __user *buffer,
+noinline static ssize_t _events_chann_fd_read(struct file *filp, char __user *buffer,
 				     size_t buffer_size, loff_t *offset)
 {
 	esf_events_channel_t *channel = filp->private_data;
@@ -192,17 +197,19 @@ static ssize_t _events_chann_fd_read(struct file *filp, char __user *buffer,
 
 	int send_err = 0;
 	loff_t cur_buff_offset = 0;
-	ssize_t events_sent = 0;
 
 	uint64_t max_events_to_send =
-		esf_event_queue_size(&channel->events_queue);
+		esf_events_queue_size(&channel->events_queue);
 
 	esf_events_t *__user events_arr = (esf_events_t *)buffer;
 	void *__user serialized_events_arr = events_arr->events;
 	size_t serialized_events_arr_size = buffer_size - sizeof(*events_arr);
 
+	esf_events_queue_t sent_events_list;
+	esf_events_queue_init(&sent_events_list);
+
 	while (max_events_to_send > 0) {
-		event_holder = esf_event_queue_hold(&channel->events_queue);
+		event_holder = esf_events_queue_hold(&channel->events_queue);
 
 		if (!event_holder) {
 			return -EPIPE;
@@ -213,16 +220,17 @@ static ssize_t _events_chann_fd_read(struct file *filp, char __user *buffer,
 					       event_holder, &cur_buff_offset);
 
 		if (send_err) {
-			esf_event_queue_release_held(event_holder);
+			esf_events_queue_release_held(event_holder);
 			break;
 		}
 
-		events_sent++;
 		max_events_to_send--;
-		esf_event_queue_dequeue_held(event_holder);
+		esf_events_queue_dequeue_held(event_holder);
+		esf_events_queue_enqueue_move(&sent_events_list, event_holder);
 		esf_put_raw_event_holder(event_holder);
 	}
 
+	size_t events_sent = esf_events_queue_size(&sent_events_list);
 	int non_copied = copy_to_user(&events_arr->count, &events_sent,
 				      sizeof(events_arr));
 
@@ -230,12 +238,26 @@ static ssize_t _events_chann_fd_read(struct file *filp, char __user *buffer,
 		return -EFAULT;
 	}
 
+	if (channel->ops && channel->ops->on_events_were_read) {
+		channel->ops->on_events_were_read(channel, &sent_events_list);
+	}
+
+	// notify that all events were read by this agent
+	for (esf_events_queue_iter_t it = esf_events_queue_make_iter(&sent_events_list);
+	     !esf_events_queue_iter_is_end(it);
+	     it = esf_events_queue_iter_next(it)) {
+		esf_raw_event_t *ev = esf_events_queue_iter_deref(it);
+		esf_raw_event_notify_read(ev);
+	}
+
+	esf_events_queue_deinit(&sent_events_list);
+
 	return cur_buff_offset + sizeof(*events_arr);
 }
 
-esf_events_channel_t *esf_events_channel_create(const char *name,
-						esf_events_channel_fops_t *ops,
-						void *private)
+esf_events_channel_t *
+esf_events_channel_create(struct task_struct *owner, const char *name,
+			  const esf_events_channel_fops_t *ops, void *private)
 {
 	esf_events_channel_t *chan =
 		kzalloc(sizeof(esf_events_channel_t), GFP_KERNEL);
@@ -252,15 +274,20 @@ esf_events_channel_t *esf_events_channel_create(const char *name,
 		return ERR_PTR(fd);
 	}
 
-	esf_log_debug("Created event channel, fd: %d", fd);
-
 	chan->fd = fd;
 	chan->private = private;
+	chan->ops = ops;
+
 	atomic_set(&chan->refc, 0);
 	atomic64_set(&chan->event_nr, 0);
 
+	chan->owner.tgid = owner->tgid;
+
 	init_waitqueue_head(&chan->wq);
-	esf_event_queue_init(&chan->events_queue);
+	esf_events_queue_init(&chan->events_queue);
+
+	esf_log_debug("Created event channel " ESF_EVENTS_CHAN_FMT_STR,
+		      ESF_EVENTS_CHAN_FMT(chan));
 
 	return esf_events_channel_get(chan);
 }
@@ -280,7 +307,9 @@ void esf_events_channel_put(esf_events_channel_t *channel)
 
 int esf_events_channel_wakeup(esf_events_channel_t *channel)
 {
-	esf_log_debug("Waking up channel %d", channel->fd);
+	esf_log_debug("Waking up channel " ESF_EVENTS_CHAN_FMT_STR,
+		      ESF_EVENTS_CHAN_FMT(channel));
+
 	wake_up(&channel->wq);
 	return 0;
 }
@@ -289,8 +318,9 @@ int esf_events_channel_send(esf_events_channel_t *channel,
 			    esf_raw_event_t *event, gfp_t gfp)
 {
 	esf_raw_event_get(event);
+
 	esf_raw_event_holder_t *holder =
-		esf_event_queue_enqueue(&channel->events_queue, event, gfp);
+		esf_events_queue_enqueue(&channel->events_queue, event, gfp);
 
 	if (!holder) {
 		return -ENOMEM;
@@ -306,10 +336,11 @@ int esf_events_channel_send(esf_events_channel_t *channel,
 		esf_events_channel_wakeup(channel);
 	}
 
+	esf_raw_event_put(event);
 	return 0;
 }
 
 uint64_t esf_events_channel_size(esf_events_channel_t *channel)
 {
-	return esf_event_queue_size(&channel->events_queue);
+	return esf_events_queue_size(&channel->events_queue);
 }

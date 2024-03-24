@@ -16,6 +16,9 @@ typedef struct esf_raw_event_item {
 typedef struct esf_raw_event {
 	// control table data
 	struct hlist_node _hnode;
+
+	atomic_t __reads_left;
+	struct completion __read_completion;
 	atomic_t decisions_left;
 	struct completion decisions_completion;
 	esf_action_decision_t decision;
@@ -67,6 +70,8 @@ int esf_raw_event_add_item_type(esf_raw_event_t *raw_event,
 
 int esf_event_id_make_decision(esf_event_id event_id,
 			       esf_action_decision_t decision);
+
+int esf_raw_event_notify_read(esf_raw_event_t *raw_event);
 
 void esf_raw_event_add_to_decision_wait_table(esf_raw_event_t *raw_event,
 					      int waiters_count);

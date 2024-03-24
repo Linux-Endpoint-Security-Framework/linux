@@ -18,9 +18,11 @@
 
 #include "defs.h"
 
-typedef struct esf_agent_ctl_subscribe {
+typedef struct esf_events_chan_ctl_subscribe {
 	esf_event_type_t event_type;
-} esf_agent_ctl_subscribe_t;
+} esf_events_chan_ctl_subscribe_t;
+
+#define ESF_EVENTS_CHAN_CTL_SUBSCRIBE _IOW('a', 0x0, esf_events_chan_ctl_subscribe_t)
 
 typedef struct esf_agent_ctl_activate {
 } esf_agent_ctl_activate_t;
@@ -40,7 +42,6 @@ typedef struct esf_agent_ctl_open_auth_channel {
 	int channel_fd;
 } esf_agent_ctl_open_auth_channel_t;
 
-#define ESF_AGENT_CTL_SUBSCRIBE _IOW('a', 0x0, esf_agent_ctl_subscribe_t)
 #define ESF_AGENT_CTL_ACTIVATE _IOW('a', 0x5, esf_agent_ctl_activate_t)
 #define ESF_AGENT_CTL_DECIDE _IOW('a', 0x10, esf_agent_ctl_decide_t)
 #define ESF_AGENT_CTL_OPEN_LISTEN_CHANNEL \

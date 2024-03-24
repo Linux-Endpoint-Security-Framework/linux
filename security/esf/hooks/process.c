@@ -176,7 +176,14 @@ int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 
 	// preprare information about file is going to be executed
 	struct fd file_to_exec = fdget(bprm->execfd);
-	struct inode *inode_to_exec = file_inode(file_to_exec.file);
+	struct inode *inode_to_exec = NULL;
+
+	if (file_to_exec.file) {
+		inode_to_exec = file_inode(file_to_exec.file);
+	} else if (bprm->file) {
+		inode_to_exec = file_inode(bprm->file);
+	}
+
 	fill_task_info.exe_info->inode = inode_to_exec;
 	fill_task_info.exe_info->filename = kstrdup(bprm->filename, GFP_KERNEL);
 	fill_task_info.exe_info->filename_len =
