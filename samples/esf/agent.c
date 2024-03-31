@@ -107,7 +107,7 @@ static inline esf_event_iterator_t esf_event_iterator_next(esf_event_iterator_t 
                  it = esf_event_iterator_next(it))\
 
 
-int esf_open_register_agent(int esf_fd) {
+int esf_register_agent(int esf_fd) {
     esf_ctl_register_agent_t register_agent = {
             .api_version = ESF_VERSION,
     };
@@ -146,7 +146,6 @@ int esf_agent_open_auth_channel(int agent_fd) {
     return open_auth_chan_cmd.channel_fd;
 }
 
-
 int esf_event_subscribe(int channel_fd, esf_event_type_t event_type) {
     esf_agent_log("subscribing to event type %d (chan: %d)...", event_type, channel_fd);
     esf_events_chan_ctl_subscribe_t subscribe_cmd = {
@@ -154,6 +153,59 @@ int esf_event_subscribe(int channel_fd, esf_event_type_t event_type) {
     };
 
     return ioctl(channel_fd, ESF_EVENTS_CHAN_CTL_SUBSCRIBE, &subscribe_cmd);
+}
+
+int esf_event_add_filter(int channel_fd, const esf_filter_t *filter) {
+    esf_agent_log("adding %s filter (chan: %d)...", filter->type == ESF_FILTER_TYPE_ALLOW ? "allow" : "drop",
+                  channel_fd);
+    esf_events_chan_ctl_add_filter_t add_filter_t = {
+            .filter = (esf_filter_t *) filter,
+    };
+
+    return ioctl(channel_fd, ESF_EVENTS_CHAN_CTL_ADD_FILTER, &add_filter_t);
+}
+
+void esf_filter_init(esf_filter_t *filter, esf_filter_type_t type, esf_filter_match_mode_t mode) {
+    memset(filter, 0, sizeof(*filter));
+    filter->match_mode = mode;
+    filter->type = type;
+}
+
+int esf_filter_add_rule(esf_filter_t *filter, esf_filter_match_mask_t match, const void *data, size_t data_size) {
+#define __STR_CHECK_AND_SET(target, val, size, max) \
+    if (size > max - 1) { \
+        return E2BIG; \
+    } \
+    memcpy(target, val, size); \
+    filter->match |= match; \
+    break
+
+#define __VAL_CHECK_AND_SET(target, val, size) \
+    if (size != sizeof(target)) { \
+        return EINVAL; \
+    } \
+    memcpy(&target, val, size); \
+    filter->match |= match;\
+    break
+
+    switch (match) {
+        case ESF_FILTER_EVENT_TYPE:
+        __VAL_CHECK_AND_SET(filter->event_type, data, data_size);
+        case ESF_FILTER_PROCESS_PATH:
+        __STR_CHECK_AND_SET(filter->process.path, data, data_size, ESF_FILTER_PATH_MAX);
+        case ESF_FILTER_PROCESS_PID:
+        __VAL_CHECK_AND_SET(filter->process.pid, data, data_size);
+        case ESF_FILTER_PROCESS_TGID:
+        __VAL_CHECK_AND_SET(filter->process.tgid, data, data_size);
+        case ESF_FILTER_PROCESS_UID:
+        __VAL_CHECK_AND_SET(filter->process.uid, data, data_size);
+        case ESF_FILTER_PROCESS_GID:
+        __VAL_CHECK_AND_SET(filter->process.gid, data, data_size);
+        case ESF_FILTER_TARGET_PATH:
+        __STR_CHECK_AND_SET(filter->target.path, data, data_size, ESF_FILTER_PATH_MAX);
+    }
+
+    return EINVAL;
 }
 
 int esf_agent_activate(int agent_fd) {
@@ -339,6 +391,81 @@ void *_decision_routine(void *arg) {
 
 #define POLL_MAX_EVENTS 20
 
+int init_listen_channel(int agent_fd) {
+    int chan_fd = esf_agent_open_listen_channel(agent_fd);
+
+    if (chan_fd < 0) {
+        esf_agent_err("esf_agent_open_listen_channel");
+        return -1;
+    }
+
+    int err = esf_event_subscribe(chan_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION);
+
+    if (err) {
+        esf_agent_err("esf_event_subscribe");
+        return -1;
+    }
+
+    out:
+    return chan_fd;
+}
+
+typedef struct {
+    const char *parent;
+    const char *child;
+} _auth_exec_filter;
+
+static _auth_exec_filter _auth_exec_filters[] = {
+        {.parent = "*/bash", .child = "*/ping"}
+};
+
+int init_auth_channel(int agent_fd) {
+    int chan_fd = esf_agent_open_auth_channel(agent_fd);
+
+    if (chan_fd < 0) {
+        esf_agent_err("esf_agent_open_auth_channel");
+        return -1;
+    }
+
+    int err = esf_event_subscribe(chan_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION);
+
+    if (err) {
+        esf_agent_err("esf_event_subscribe");
+        return -1;
+    }
+
+    for (int i = 0; i < sizeof(_auth_exec_filters) / sizeof(_auth_exec_filter); i++) {
+        _auth_exec_filter exec_filter = _auth_exec_filters[i];
+        esf_filter_t filter;
+        esf_event_type_t proc_exec_type = ESF_EVENT_TYPE_PROCESS_EXECUTION;
+        esf_filter_init(&filter, ESF_FILTER_TYPE_DROP, ESF_FILTER_MATCH_MODE_AND);
+        esf_filter_add_rule(&filter, ESF_FILTER_EVENT_TYPE, &proc_exec_type, sizeof(proc_exec_type));
+        esf_filter_add_rule(&filter, ESF_FILTER_PROCESS_PATH, exec_filter.parent, strlen(exec_filter.parent));
+        esf_filter_add_rule(&filter, ESF_FILTER_TARGET_PATH, exec_filter.child, strlen(exec_filter.child));
+        err = esf_event_add_filter(chan_fd, &filter);
+
+        if (err) {
+            esf_agent_log("unable to add filter to chan %d, error: %s", chan_fd, strerror(errno));
+            return -1;
+        }
+    }
+
+    esf_filter_t filter;
+    esf_event_type_t proc_exec_type = ESF_EVENT_TYPE_PROCESS_EXECUTION;
+    esf_filter_init(&filter, ESF_FILTER_TYPE_ALLOW, ESF_FILTER_MATCH_MODE_AND);
+    esf_filter_add_rule(&filter, ESF_FILTER_EVENT_TYPE, &proc_exec_type, sizeof(proc_exec_type));
+    esf_filter_add_rule(&filter, ESF_FILTER_PROCESS_PATH, "*", strlen("*"));
+    err = esf_event_add_filter(chan_fd, &filter);
+
+    if (err) {
+        esf_agent_log("unable to add filter to chan %d, error: %s", chan_fd, strerror(errno));
+        return -1;
+    }
+
+    out:
+    return chan_fd;
+}
+
 int main(int argc, char **argv) {
     int esf_fd = 0, agent_fd = 0, err = 0;
     size_t buffer_size = PAGE_SIZE * 4096;
@@ -378,10 +505,10 @@ int main(int argc, char **argv) {
         goto out_join;
     }
 
-    agent_fd = esf_open_register_agent(esf_fd);
+    agent_fd = esf_register_agent(esf_fd);
 
     if (agent_fd < 0) {
-        esf_agent_err("esf_open_register_agent");
+        esf_agent_err("esf_register_agent");
         err = agent_fd;
         goto out_join;
     }
@@ -389,21 +516,14 @@ int main(int argc, char **argv) {
     int chan_fd = -1;
 
     if (controller) {
-        chan_fd = esf_agent_open_auth_channel(agent_fd);
+        chan_fd = init_auth_channel(agent_fd);
     } else {
-        chan_fd = esf_agent_open_listen_channel(agent_fd);
+        chan_fd = init_listen_channel(agent_fd);
     }
 
     if (chan_fd < 0) {
-        esf_agent_err("esf_agent_open_%s_channel", controller ? "auth" : "listen");
+        esf_agent_err("init_%s_channel", controller ? "auth" : "listen");
         err = errno;
-        goto out_join;
-    }
-
-    err = esf_event_subscribe(chan_fd, ESF_EVENT_TYPE_PROCESS_EXECUTION);
-
-    if (err) {
-        esf_agent_err("esf_event_subscribe");
         goto out_join;
     }
 

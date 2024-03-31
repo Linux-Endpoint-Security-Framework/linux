@@ -29,13 +29,14 @@ int esf_on_file_open(struct file *file)
 	esf_file_fill_data_t file_fill_data = { 0 };
 	file_fill_data.file = file;
 
-	esf_fill_process_from_fill_data(raw_event,
-					&raw_event->event.process,
-					&process_fill_data, GFP_KERNEL);
+	esf_fill_process_from_fill_data(raw_event, &raw_event->event.process,
+					&process_fill_data,
+					&raw_event->filter_data.process,
+					GFP_KERNEL);
 
-	esf_fill_file_from_fill_data(raw_event,
-				     &raw_event->event.file_open.file,
-				     &file_fill_data, GFP_KERNEL);
+	esf_fill_file_from_fill_data(
+		raw_event, &raw_event->event.file_open.file, &file_fill_data,
+		&raw_event->filter_data.target, GFP_KERNEL);
 
 	raw_event->event.file_open.flags = file->f_flags;
 
@@ -76,13 +77,14 @@ int esf_on_file_truncate(struct file *file)
 	esf_file_fill_data_t file_fill_data = { 0 };
 	file_fill_data.file = file;
 
-	esf_fill_process_from_fill_data(raw_event,
-					&raw_event->event.process,
-					&process_fill_data, GFP_KERNEL);
+	esf_fill_process_from_fill_data(raw_event, &raw_event->event.process,
+					&process_fill_data,
+					&raw_event->filter_data.process,
+					GFP_KERNEL);
 
-	esf_fill_file_from_fill_data(raw_event,
-				     &raw_event->event.file_truncate.file,
-				     &file_fill_data, GFP_KERNEL);
+	esf_fill_file_from_fill_data(
+		raw_event, &raw_event->event.file_truncate.file,
+		&file_fill_data, &raw_event->filter_data.target, GFP_KERNEL);
 
 	ret = esf_submit_raw_event_ex(raw_event, GFP_KERNEL,
 				      ESF_SUBMIT_WAIT_FOR_DECISION);

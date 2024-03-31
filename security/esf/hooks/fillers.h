@@ -63,19 +63,20 @@ typedef struct esf_process_fill_data {
 	esf_file_fill_data_t *exe_info;
 } esf_process_fill_data_t;
 
-void esf_fill_ns_from_task(esf_ns_info_t *ns, struct task_struct *task);
+void esf_fill_ns_from_task(esf_ns_info_t *ns, struct task_struct *task,
+			   esf_raw_event_filter_data_payload_t *init_filter);
 
-void esf_fill_creds_from_task(esf_creds_info_t *creds,
-			      struct task_struct *task);
+void esf_fill_creds_from_task(esf_creds_info_t *creds, struct task_struct *task,
+			      esf_raw_event_filter_data_payload_t *init_filter);
 
-void esf_fill_file_from_fill_data(esf_raw_event_t *raw_event,
-				  esf_file_info_t *file,
-				  esf_file_fill_data_t *file_fill_info,
-				  gfp_t gfp);
+void esf_fill_file_from_fill_data(
+	esf_raw_event_t *raw_event, esf_file_info_t *file,
+	esf_file_fill_data_t *file_fill_info,
+	esf_raw_event_filter_data_payload_t *init_filter, gfp_t gfp);
 
-void esf_fill_process_from_fill_data(esf_raw_event_t *raw_event,
-				     esf_process_info_t *process,
-				     esf_process_fill_data_t *task_fill_info,
-				     gfp_t gfp);
+void esf_fill_process_from_fill_data(
+	esf_raw_event_t *raw_event, esf_process_info_t *process,
+	esf_process_fill_data_t *task_fill_info,
+	esf_raw_event_filter_data_payload_t *init_filter, gfp_t gfp);
 
 #endif //__LINUX_ESF_HOOKS_FILLERS_H

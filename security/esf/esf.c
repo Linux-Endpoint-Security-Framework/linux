@@ -190,7 +190,7 @@ int esf_submit_raw_event_ex(esf_raw_event_t *raw_event, gfp_t gfp,
 		// agent is not subscribed to this event type, do not send event to this one
 		if (esf_agent_listens_to(agent, raw_event->event.header.type)) {
 			// agent active and subscribed to this event type, write to broadcast
-			// table and ref up agnet (will be putted after sending event)
+			// table and ref up agent (will be putted after sending event)
 			listener_agents[listeners_num] = agent;
 			listeners_num++;
 			esf_agent_get(agent);
@@ -213,6 +213,13 @@ put_agent:
 	// authorizers more than 0, set waits to auth flag to event
 	if (authorizers_num > 0) {
 		raw_event->event.header.flags |= ESF_EVENT_WAITS_FOR_AUTH;
+
+		if (flags & ESF_SUBMIT_WAIT_FOR_DECISION) {
+			// add this event to wait table with calculated
+			// amount of agents which will make decision
+			esf_raw_event_add_to_decision_wait_table(
+				raw_event, authorizers_num);
+		}
 	}
 
 	// broadcast event to all agents want to authorize this one
@@ -230,19 +237,13 @@ put_agent:
 	}
 #endif
 
-	// if any at least one agent want to control this event, we should
+	// if any (at least one) agent want to control this event, we should
 	// wait for decision from all agents
 	if (authorizers_num > 0 && (flags & ESF_SUBMIT_WAIT_FOR_DECISION)) {
 #ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
 		esf_log_debug("%d agents want control " RAW_EVENT_FMT_STR,
 			      authorizers_num, RAW_EVENT_FMT(raw_event));
 #endif
-
-		// add this event to wait table with calculated
-		// amount of agents which will make decision
-		esf_raw_event_add_to_decision_wait_table(raw_event,
-							 authorizers_num);
-
 		// and finally wait for decision
 		decision = esf_raw_event_wait_for_decision(raw_event);
 

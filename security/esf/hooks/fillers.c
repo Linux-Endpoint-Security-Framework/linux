@@ -12,7 +12,8 @@
 
 #include "log.h"
 
-void esf_fill_ns_from_task(esf_ns_info_t *ns, struct task_struct *task)
+void esf_fill_ns_from_task(esf_ns_info_t *ns, struct task_struct *task,
+			   esf_raw_event_filter_data_payload_t *init_filter)
 {
 	ns->uts_ns = _ACCESSIBLE(task, nsproxy, uts_ns) ?
 			     task->nsproxy->uts_ns->ns.inum :
@@ -45,7 +46,8 @@ void esf_fill_ns_from_task(esf_ns_info_t *ns, struct task_struct *task)
 			init_nsproxy.time_ns_for_children->ns.inum;
 }
 
-void esf_fill_creds_from_task(esf_creds_info_t *creds, struct task_struct *task)
+void esf_fill_creds_from_task(esf_creds_info_t *creds, struct task_struct *task,
+			      esf_raw_event_filter_data_payload_t *init_filter)
 {
 	creds->uid = task_cred_xxx(task, uid).val;
 	creds->euid = task_cred_xxx(task, euid).val;
@@ -58,10 +60,10 @@ void esf_fill_creds_from_task(esf_creds_info_t *creds, struct task_struct *task)
 	creds->fsgid = task_cred_xxx(task, fsgid).val;
 }
 
-void esf_fill_process_from_fill_data(esf_raw_event_t *raw_event,
-				     esf_process_info_t *process,
-				     esf_process_fill_data_t *task_fill_info,
-				     gfp_t gfp)
+void esf_fill_process_from_fill_data(
+	esf_raw_event_t *raw_event, esf_process_info_t *process,
+	esf_process_fill_data_t *task_fill_info,
+	esf_raw_event_filter_data_payload_t *init_filter, gfp_t gfp)
 {
 	BUG_ON(!task_fill_info);
 	BUG_ON(!task_fill_info->task);
@@ -105,7 +107,8 @@ void esf_fill_process_from_fill_data(esf_raw_event_t *raw_event,
 
 	if (task_fill_info->exe_info) {
 		esf_fill_file_from_fill_data(raw_event, &process->exe,
-					     task_fill_info->exe_info, gfp);
+					     task_fill_info->exe_info,
+					     init_filter, gfp);
 
 	} else if (mm && mm->exe_file) {
 		esf_file_fill_data_t exe_info = { 0 };
@@ -127,7 +130,8 @@ void esf_fill_process_from_fill_data(esf_raw_event_t *raw_event,
 				strlen(task_fill_info->task->comm);
 
 			esf_fill_file_from_fill_data(raw_event, &process->exe,
-						     &exe_info, gfp);
+						     &exe_info, init_filter,
+						     gfp);
 
 		} else {
 			exe_info.inode = file_inode(mm->exe_file);
@@ -135,7 +139,8 @@ void esf_fill_process_from_fill_data(esf_raw_event_t *raw_event,
 			exe_info.filename_len = strlen(fpath);
 
 			esf_fill_file_from_fill_data(raw_event, &process->exe,
-						     &exe_info, gfp);
+						     &exe_info, init_filter,
+						     gfp);
 		}
 
 		kfree(path_buffer);
@@ -146,30 +151,34 @@ void esf_fill_process_from_fill_data(esf_raw_event_t *raw_event,
 		exe_info.filename_len = sizeof("kthread");
 
 		esf_fill_file_from_fill_data(raw_event, &process->exe,
-					     &exe_info, gfp);
+					     &exe_info, init_filter, gfp);
 	}
 
 fill_integral:
 	process->pid = task_fill_info->task->pid;
 	process->tgid = task_fill_info->task->tgid;
 
-	esf_fill_creds_from_task(&process->creds, task_fill_info->task);
-	esf_fill_ns_from_task(&process->namespace, task_fill_info->task);
+	esf_fill_creds_from_task(&process->creds, task_fill_info->task,
+				 init_filter);
+	esf_fill_ns_from_task(&process->namespace, task_fill_info->task,
+			      init_filter);
 
 	if (mm) {
 		mmput(mm);
 	}
 }
 
-void esf_fill_file_from_fill_data(esf_raw_event_t *raw_event,
-				  esf_file_info_t *file,
-				  esf_file_fill_data_t *file_fill_info,
-				  gfp_t gfp)
+void esf_fill_file_from_fill_data(
+	esf_raw_event_t *raw_event, esf_file_info_t *file,
+	esf_file_fill_data_t *file_fill_info,
+	esf_raw_event_filter_data_payload_t *init_filter, gfp_t gfp)
 {
 	BUG_ON(!file_fill_info);
 
+	esf_raw_item_t *file_path_item;
+
 	if (file_fill_info->filename) {
-		esf_raw_event_add_item_ex(
+		file_path_item = esf_raw_event_add_item_ex(
 			raw_event, &file->path, ESF_ITEM_TYPE_STRING,
 			file_fill_info->filename, file_fill_info->filename_len,
 			gfp, ESF_ADD_ITEM_KERNMEM | ESF_ADD_ITEM_MOVEMEM);
@@ -184,12 +193,15 @@ void esf_fill_file_from_fill_data(esf_raw_event_t *raw_event,
 		char *fpath =
 			file_path(file_fill_info->file, path_buffer, PATH_MAX);
 
-		esf_raw_event_add_item_ex(raw_event, &file->path,
-					  ESF_ITEM_TYPE_STRING, fpath,
-					  strlen(fpath), gfp,
-					  ESF_ADD_ITEM_KERNMEM);
+		file_path_item = esf_raw_event_add_item_ex(
+			raw_event, &file->path, ESF_ITEM_TYPE_STRING, fpath,
+			strlen(fpath), gfp, ESF_ADD_ITEM_KERNMEM);
 
 		kfree(path_buffer);
+	}
+
+	if (!IS_ERR_OR_NULL(file_path_item) && init_filter) {
+		init_filter->path = file_path_item->data;
 	}
 
 	if (!file_fill_info->inode && file_fill_info->file) {

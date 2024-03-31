@@ -164,10 +164,9 @@ void _esf_raw_event_destroy(esf_raw_event_t *raw_event)
 	_esf_raw_event_free(raw_event);
 }
 
-int esf_raw_event_add_item_ex(esf_raw_event_t *raw_event, esf_item_t *item,
-			      esf_item_type_t item_type, void *data,
-			      size_t data_size, gfp_t gfp,
-			      esf_add_item_flags_t flags)
+const esf_raw_item_t *esf_raw_event_add_item_ex(
+	esf_raw_event_t *raw_event, esf_item_t *item, esf_item_type_t item_type,
+	void *data, size_t data_size, gfp_t gfp, esf_add_item_flags_t flags)
 {
 	ASSERT_ITEM_IS_OWNED_BY(&raw_event->event, item);
 
@@ -191,7 +190,7 @@ int esf_raw_event_add_item_ex(esf_raw_event_t *raw_event, esf_item_t *item,
 			      (uint64_t)raw_event);
 #endif
 
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 	}
 
 	list_add(&raw_item->_node, &raw_event->raw_items);
@@ -207,21 +206,24 @@ int esf_raw_event_add_item_ex(esf_raw_event_t *raw_event, esf_item_t *item,
 	raw_event->items_data_size += raw_item->item->size;
 	raw_event->event.data_size = raw_event->items_data_size;
 
-	return 0;
+	return raw_item;
 }
 
-int esf_raw_event_add_item(esf_raw_event_t *raw_event, esf_item_t *__owned item,
-			   void *data, size_t data_size, gfp_t gfp)
+const esf_raw_item_t *esf_raw_event_add_item(esf_raw_event_t *raw_event,
+					     esf_item_t *__owned item,
+					     void *data, size_t data_size,
+					     gfp_t gfp)
 {
 	return esf_raw_event_add_item_ex(raw_event, item, ESF_ITEM_TYPE_STRING,
 					 data, data_size, gfp,
 					 ESF_ADD_ITEM_KERNMEM);
 }
 
-int esf_raw_event_add_item_type(esf_raw_event_t *raw_event,
-				esf_item_t *__owned item,
-				esf_item_type_t item_type, void *data,
-				size_t data_size, gfp_t gfp)
+const esf_raw_item_t *esf_raw_event_add_item_type(esf_raw_event_t *raw_event,
+						  esf_item_t *__owned item,
+						  esf_item_type_t item_type,
+						  void *data, size_t data_size,
+						  gfp_t gfp)
 {
 	return esf_raw_event_add_item_ex(raw_event, item, item_type, data,
 					 data_size, gfp, ESF_ADD_ITEM_KERNMEM);
@@ -256,6 +258,12 @@ void esf_raw_event_put(esf_raw_event_t *raw_event)
 
 static DEFINE_MUTEX(_wait_decision_tbl_mtx);
 static DECLARE_HASHTABLE(_wait_decision_tbl, 12);
+
+int esf_raw_event_make_decision(esf_raw_event_t *raw_event,
+				esf_action_decision_t decision)
+{
+	return esf_event_id_make_decision(raw_event->event.header.id, decision);
+}
 
 int esf_event_id_make_decision(esf_event_id event_id,
 			       esf_action_decision_t decision)
@@ -317,8 +325,7 @@ static int _esf_raw_event_wait_for_one_read(esf_raw_event_t *raw_event,
 {
 	atomic_set(&raw_event->__reads_left, reads_count);
 
-	uint64_t read_timeout =
-		msecs_to_jiffies(_ESF_EVENT_READ_TIMEOUT_MS);
+	uint64_t read_timeout = msecs_to_jiffies(_ESF_EVENT_READ_TIMEOUT_MS);
 
 	uint64_t till_read_timeout = wait_for_completion_interruptible_timeout(
 		&raw_event->decisions_completion, read_timeout);

@@ -16,13 +16,19 @@
 
 #include <linux/ioctl.h>
 
+#include "filters.h"
 #include "defs.h"
 
 typedef struct esf_events_chan_ctl_subscribe {
 	esf_event_type_t event_type;
 } esf_events_chan_ctl_subscribe_t;
 
+typedef struct esf_events_chan_ctl_add_filter {
+	esf_filter_t *filter;
+} esf_events_chan_ctl_add_filter_t;
+
 #define ESF_EVENTS_CHAN_CTL_SUBSCRIBE _IOW('a', 0x0, esf_events_chan_ctl_subscribe_t)
+#define ESF_EVENTS_CHAN_CTL_ADD_FILTER _IOW('a', 0x1, esf_events_chan_ctl_add_filter_t)
 
 typedef struct esf_agent_ctl_activate {
 } esf_agent_ctl_activate_t;

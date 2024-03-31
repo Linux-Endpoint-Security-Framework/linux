@@ -48,6 +48,78 @@ static bool _agent_chan_wakeup(struct esf_events_channel *chan,
 	return true;
 }
 
+static bool _agent_chan_event_passed_filters(struct esf_events_channel *chan,
+					     esf_raw_event_t *event,
+					     esf_filter_type_t filters_type,
+					     size_t filters_count)
+{
+	_agent_channel_private_data_t *dat = chan->private;
+
+	switch (dat->policy) {
+	case AGENT_LISTEN_CHANNEL_BEHAVIOUR_POLICY: {
+		switch (filters_type) {
+		case ESF_FILTER_TYPE_ALLOW:
+			// event passed allow filters on listen channel
+			// drop event, because no one filter allows it
+			return false;
+		default:
+		case ESF_FILTER_TYPE_DROP:
+			// event passed drop filters on listen channel
+			// allow event, because no one filter drops it
+			return true;
+		}
+	} break;
+	case AGENT_AUTH_CHANNEL_BEHAVIOUR_POLICY: {
+		// send this event anyway to ask agent for decision
+		return true;
+	} break;
+	}
+
+	return true;
+}
+
+static bool _agent_chan_event_filtered(struct esf_events_channel *chan,
+				       esf_raw_event_t *raw_event,
+				       esf_filter_t *filter)
+{
+	_agent_channel_private_data_t *dat = chan->private;
+
+	switch (dat->policy) {
+	case AGENT_LISTEN_CHANNEL_BEHAVIOUR_POLICY: {
+		switch (filter->type) {
+		case ESF_FILTER_TYPE_ALLOW:
+			return true;
+		default:
+		case ESF_FILTER_TYPE_DROP:
+			esf_log_debug(RAW_EVENT_FMT_STR " filtered",
+				      RAW_EVENT_FMT(raw_event));
+			return false;
+		}
+	} break;
+	case AGENT_AUTH_CHANNEL_BEHAVIOUR_POLICY: {
+		switch (filter->type) {
+		case ESF_FILTER_TYPE_ALLOW:
+			esf_raw_event_make_decision(raw_event,
+						    ESF_ACTION_DECISION_ALLOW);
+			esf_log_debug(RAW_EVENT_FMT_STR " allowed by filter",
+				      RAW_EVENT_FMT(raw_event));
+
+			return false;
+		default:
+		case ESF_FILTER_TYPE_DROP:
+			esf_raw_event_make_decision(raw_event,
+						    ESF_ACTION_DECISION_DENY);
+			esf_log_debug(RAW_EVENT_FMT_STR " declined by filter",
+				      RAW_EVENT_FMT(raw_event));
+
+			return false;
+		}
+	} break;
+	}
+
+	return true;
+}
+
 static int _agent_chan_release(struct esf_events_channel *chan)
 {
 	_agent_channel_private_data_t *data = chan->private;
@@ -67,8 +139,10 @@ static int _agent_chan_release(struct esf_events_channel *chan)
 	return 0;
 }
 
-static const esf_events_channel_fops_t _agent_events_chan_fops = {
+static const esf_events_channel_ctl_t _agent_events_chan_fops = {
 	.want_wakeup = _agent_chan_wakeup,
+	.event_passed_filters = _agent_chan_event_passed_filters,
+	.event_filtered = _agent_chan_event_filtered,
 	.release = _agent_chan_release,
 };
 
