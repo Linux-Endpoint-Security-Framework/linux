@@ -336,7 +336,7 @@ static int _esf_raw_event_wait_for_one_read(esf_raw_event_t *raw_event,
 				  " read timed out",
 				  RAW_EVENT_FMT(raw_event));
 	} else {
-		esf_log_debug("Event " RAW_EVENT_FMT_STR "read",
+		esf_log_debug(RAW_EVENT_FMT_STR " maked as read",
 			      RAW_EVENT_FMT(raw_event));
 	}
 #endif
@@ -404,6 +404,8 @@ esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event)
 		wait_for_completion_interruptible_timeout(
 			&raw_event->decisions_completion, decision_timeout);
 
+	final_decision = raw_event->decision;
+
 #ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
 	if (till_decision_timeout == 0) {
 		esf_log_debug_err("Waiting for " RAW_EVENT_FMT_STR
@@ -419,8 +421,6 @@ esf_raw_event_wait_for_decision(esf_raw_event_t *raw_event)
 					 till_decision_timeout));
 	}
 #endif
-
-	final_decision = raw_event->decision;
 
 out_remove_from_table:
 	esf_raw_event_remove_to_decision_wait_table(raw_event);

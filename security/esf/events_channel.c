@@ -400,7 +400,7 @@ int esf_events_channel_wakeup(esf_events_channel_t *channel)
 	esf_log_debug("Waking up channel " ESF_EVENTS_CHAN_FMT_STR,
 		      ESF_EVENTS_CHAN_FMT(channel));
 
-	int woken_up = wake_up(&channel->wq);
+	int woken_up = wake_up_all(&channel->wq);
 	esf_log_debug("%d tasks woken up", woken_up);
 
 	return 0;

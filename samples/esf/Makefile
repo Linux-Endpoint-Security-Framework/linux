@@ -15,4 +15,4 @@ clean:
 standalone: standalone-agent
 
 standalone-agent: $(info $(shell realpath $$(pwd)) $(EXTRA_FLAGS))
-	gcc $(EXTRA_FLAGS) -g -ggdb -std=c11 ./agent.c -o agent
+	gcc $(EXTRA_FLAGS) -g -ggdb -std=c11 ./events_queue.c ./agent.c -o agent
