@@ -158,7 +158,7 @@ int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 	fill_task_info.task = task;
 	fill_header_task_info.task = parent_task;
 
-	uint32_t uarr_size = (bprm->exec - bprm->p);
+	uint32_t uarr_size = bprm->exec - bprm->p;
 	void *environ_dump = _dump_user_pages(bprm, (void *__user)bprm->p,
 					      uarr_size, GFP_KERNEL);
 
@@ -187,7 +187,7 @@ int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 	fill_task_info.exe_info->inode = inode_to_exec;
 	fill_task_info.exe_info->filename = kstrdup(bprm->filename, GFP_KERNEL);
 	fill_task_info.exe_info->filename_len =
-		bprm->filename ? strlen(bprm->filename) : 0;
+		bprm->filename ? strmovelen(bprm->filename) : 0;
 	fdput(file_to_exec);
 
 	// fill header with parent information
@@ -205,7 +205,8 @@ int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 		esf_raw_event_add_item(
 			raw_event,
 			&raw_event->event.process_execution.interpreter,
-			(void *)bprm->interp, strlen(bprm->interp), GFP_KERNEL);
+			(void *)bprm->interp, strmovelen(bprm->interp),
+			GFP_KERNEL);
 	}
 
 	ret = esf_submit_raw_event_ex(raw_event, GFP_KERNEL,

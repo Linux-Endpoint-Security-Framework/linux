@@ -13,3 +13,4 @@ obj-$(CONFIG_SECURITY_ESF) += \
 	hooks/fillers.o
 
 ccflags-y := -I$(srctree)/security/esf
+ccflags-$(CONFIG_SECURITY_ESF_DEBUG) += -g -ggdb -O1 -fno-inline

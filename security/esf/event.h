@@ -2,6 +2,7 @@
 #define __LINUX_ESF_EVENT_H
 
 #include <uapi/linux/esf/defs.h>
+#include <linux/string.h>
 #include <linux/list.h>
 
 #define __owned
@@ -64,6 +65,9 @@ typedef enum esf_add_item_flags {
 	ESF_ADD_ITEM_USERMEM = 1 << 0,
 	ESF_ADD_ITEM_MOVEMEM = 1 << 1
 } esf_add_item_flags_t;
+
+// get string lengh for storing in buffer. Strings stored with zero
+#define strmovelen(str) (strlen(str) + 1)
 
 const esf_raw_item_t *esf_raw_event_add_item_ex(esf_raw_event_t *raw_event,
 						esf_item_t *__owned item,

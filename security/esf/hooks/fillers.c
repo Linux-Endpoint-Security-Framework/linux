@@ -124,10 +124,11 @@ void esf_fill_process_from_fill_data(
 			esf_log_err("Unable to fill process path, err: %ld",
 				    PTR_ERR(fpath));
 
+			// copy and set size (including NUL terminator)
 			exe_info.filename =
 				kstrdup(task_fill_info->task->comm, gfp);
 			exe_info.filename_len =
-				strlen(task_fill_info->task->comm);
+				strmovelen(task_fill_info->task->comm);
 
 			esf_fill_file_from_fill_data(raw_event, &process->exe,
 						     &exe_info, init_filter,
@@ -135,8 +136,10 @@ void esf_fill_process_from_fill_data(
 
 		} else {
 			exe_info.inode = file_inode(mm->exe_file);
+
+			// copy and set size (including NUL terminator)
 			exe_info.filename = kstrdup(fpath, gfp);
-			exe_info.filename_len = strlen(fpath);
+			exe_info.filename_len = strmovelen(fpath);
 
 			esf_fill_file_from_fill_data(raw_event, &process->exe,
 						     &exe_info, init_filter,
@@ -147,6 +150,8 @@ void esf_fill_process_from_fill_data(
 
 	} else if (!mm && task_fill_info->task->flags & PF_KTHREAD) {
 		esf_file_fill_data_t exe_info = { 0 };
+
+		// copy and set size (including NUL terminator)
 		exe_info.filename = kstrdup("kthread", gfp);
 		exe_info.filename_len = sizeof("kthread");
 
@@ -175,7 +180,7 @@ void esf_fill_file_from_fill_data(
 {
 	BUG_ON(!file_fill_info);
 
-	esf_raw_item_t *file_path_item;
+	const esf_raw_item_t *file_path_item = NULL;
 
 	if (file_fill_info->filename) {
 		file_path_item = esf_raw_event_add_item_ex(

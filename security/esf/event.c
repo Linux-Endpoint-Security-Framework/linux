@@ -41,7 +41,7 @@ esf_raw_item_t *_esf_raw_item_create(esf_item_t *__owned item, void *data,
 	esf_raw_item_t *raw_item = _esf_raw_item_alloc(gfp);
 	size_t item_size = data_size;
 
-	if (!raw_item) {
+	if (!raw_item || !data_size) {
 		return NULL;
 	}
 
@@ -63,6 +63,9 @@ esf_raw_item_t *_esf_raw_item_create(esf_item_t *__owned item, void *data,
 	} else {
 		// memory will be just moved, so keep data size as passed to func
 		raw_item->data = data;
+
+		// assert that moved item also ends with zero
+		BUG_ON(((char *)raw_item->data)[item_size - 1] != 0x0);
 	}
 
 	atomic_set(&raw_item->refs, 0);

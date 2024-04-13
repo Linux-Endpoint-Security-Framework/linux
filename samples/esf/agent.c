@@ -318,7 +318,12 @@ const char *_basename(char const *path, uint32_t pathlen)
 		pathlen--;
 	}
 
-	return path + pathlen;
+	// not found
+	if (pathlen == 0) {
+		return path;
+	}
+
+	return path + pathlen + 1;
 }
 
 bool _is_program(const char *p, const char *e, uint32_t pathlen)
@@ -475,10 +480,13 @@ void *_print_routine(void *arg)
 		switch (decision) {
 		case ESF_ACTION_DECISION_DENY:
 			esf_agent_log("} -> deny"RESET);
+			break;
 		case ESF_ACTION_DECISION_ALLOW:
 			esf_agent_log("} -> allow"RESET);
+			break;
 		default:
 			esf_agent_log("}"RESET);
+			break;
 		}
 
 		if (parent_exe) {
@@ -513,10 +521,11 @@ void _auth_callback(const esf_events_channel_t *channel,
 	if (event->header.flags & ESF_EVENT_CAN_CONTROL) {
 		if (event->header.type == ESF_EVENT_TYPE_PROCESS_EXECUTION) {
 			const char *exe_path = esf_item_as_ref(
-				event, process.exe.path);
+				event, process_execution.interpreter);
 
 			decision = _is_program(exe_path, "python",
-			                       event->process.exe.path.size) ?
+			                       event->process_execution.
+			                       interpreter.size) ?
 				           ESF_ACTION_DECISION_DENY :
 				           ESF_ACTION_DECISION_ALLOW;
 		}
