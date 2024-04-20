@@ -232,5 +232,25 @@ skip_path_filling:
 
 		file->mode = file_fill_info->inode->i_mode;
 		file->size = file_fill_info->inode->i_size;
+
+		if (file_fill_info->inode->i_sb) {
+			strncpy(file->fs.type,
+				file_fill_info->inode->i_sb->s_id,
+				sizeof(file->fs.type));
+		}
+	}
+
+	if (file_fill_info->fs_mnt_point) {
+		char *path_buffer = kzalloc(PATH_MAX, gfp);
+
+		if (path_buffer) {
+			char *path = dentry_path_raw(
+				file_fill_info->fs_mnt_point->mnt_root,
+				path_buffer, PATH_MAX);
+
+			esf_log_debug("--> Mount path: %s", path);
+
+			kfree(path_buffer);
+		}
 	}
 }

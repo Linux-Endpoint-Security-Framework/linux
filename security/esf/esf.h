@@ -1,7 +1,7 @@
 #ifndef __LINUX_ESF_H
 #define __LINUX_ESF_H
 
-#include <linux/rwlock.h>
+#include <linux/spinlock.h>
 
 #include "agent.h"
 

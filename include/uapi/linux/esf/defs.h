@@ -182,6 +182,10 @@ typedef struct esf_creds_info {
 	__kernel_gid32_t fsgid;
 } esf_creds_info_t;
 
+typedef struct esf_fs_info {
+	char type[32];
+} esf_fs_info_t;
+
 typedef struct esf_file_info {
 	__kernel_ino_t inode;
 	__kernel_mode_t mode;
@@ -192,6 +196,7 @@ typedef struct esf_file_info {
 	__s64 mtime;
 	__s64 atime;
 	esf_item_t path;
+	esf_fs_info_t fs;
 } esf_file_info_t;
 
 typedef struct esf_process_info {
