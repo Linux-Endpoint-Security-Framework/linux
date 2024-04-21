@@ -2,6 +2,7 @@
 
 obj-$(CONFIG_SECURITY_ESF) += \
 	esf.o \
+	blobs.o \
 	agent.o \
 	hooks.o \
 	event.o \

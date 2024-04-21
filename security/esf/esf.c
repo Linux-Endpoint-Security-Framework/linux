@@ -12,6 +12,7 @@
 #include "esf.h"
 #include "log.h"
 #include "hooks.h"
+#include "blobs.h"
 
 static bool verify_sig = IS_ENABLED(CONFIG_SECURITY_CHECK_SIGNATURE);
 module_param(verify_sig, bool, 0600);
@@ -400,19 +401,8 @@ static int __exit _esf_exit(void)
 	return 0;
 }
 
-static struct lsm_blob_sizes _esf_blobs = {
-	.lbs_task = sizeof(esf_process_lsb_t),
-	.lbs_cred = 0,
-	.lbs_file = 0,
-	.lbs_inode = 0,
-	.lbs_superblock = 0,
-	.lbs_ipc = 0,
-	.lbs_msg_msg = 0,
-	.lbs_xattr_count = 0,
-};
-
 DEFINE_LSM(esf) = {
 	.name = "esf",
 	.init = _esf_init,
-	.blobs = &_esf_blobs,
+	.blobs = &esf_blobs,
 };

@@ -5,10 +5,6 @@
 #include <linux/binfmts.h>
 #include <linux/uuid.h>
 
-typedef struct esf_process_lsb {
-	uuid_t unique_id;
-} esf_process_lsb_t;
-
 int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm);
 
 void esf_on_process_exited(struct task_struct *task);

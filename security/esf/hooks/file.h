@@ -2,6 +2,7 @@
 #define __LINUX_ESF_HOOKS_FILE_H
 
 #include <linux/file.h>
+#include "blobs.h"
 
 int esf_on_check_inode_permission(struct inode *inode, int mask);
 

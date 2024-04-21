@@ -9,6 +9,7 @@
 #include "esf.h"
 #include "fillers.h"
 #include "event.h"
+#include "blobs.h"
 
 static noinline int _dump_user_page(struct linux_binprm *bprm, void *buffer,
 				    ulong pos)
@@ -132,22 +133,23 @@ out:
 int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 {
 	int ret = 0;
+	struct task_struct *parent_task = NULL;
+	esf_raw_event_t *raw_event = NULL;
 
 	if (!esf_anyone_subscribed_to(ESF_EVENT_TYPE_PROCESS_EXECUTION)) {
-		return 0;
+		goto out;
 	}
 
-	esf_raw_event_t *raw_event = esf_raw_event_create(
+	raw_event = esf_raw_event_create(
 		ESF_EVENT_TYPE_PROCESS_EXECUTION,
 		ESF_EVENT_SIMPLE | ESF_EVENT_CAN_CONTROL, GFP_KERNEL);
 
 	if (!raw_event) {
-		return 0;
+		goto out;
 	}
 
-	struct task_struct *parent_task =
-		task->parent ? get_task_struct(task->parent) :
-			       get_task_struct(task);
+	parent_task = task->parent ? get_task_struct(task->parent) :
+				     get_task_struct(task);
 
 	esf_process_fill_data_t fill_task_info = { 0 };
 	esf_file_fill_data_t fill_task_file_info = { 0 };
@@ -212,9 +214,19 @@ int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 	ret = esf_submit_raw_event_ex(raw_event, GFP_KERNEL,
 				      ESF_SUBMIT_WAIT_FOR_DECISION);
 
-	esf_raw_event_put(raw_event);
+out:
+	if (raw_event) {
+		esf_raw_event_put(raw_event);
+	}
 
-	put_task_struct(parent_task);
+	if (parent_task) {
+		put_task_struct(parent_task);
+	}
+
+	if (ret == 0) {
+		esf_process_lsb_t *esf_task = esf_get_task_lsb(task);
+		uuid_gen(&esf_task->unique_id);
+	}
 
 	return ret;
 }

@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/stddef.h>
 #include <linux/limits.h>
+#include <linux/uuid.h>
 
 #define ESV_V1 1
 #define ESF_VERSION ESV_V1
@@ -46,6 +47,7 @@ typedef struct esf_item {
 } esf_item_t;
 
 #define __ESF_BIT_FIELD(n) (1 << n)
+#define __ESF_UUID_LEN 16
 
 typedef enum esf_event_flags {
 	ESF_EVENT_SIMPLE = 0,
@@ -92,6 +94,7 @@ typedef enum esf_event_type {
 	ESF_EVENT_TYPE_FILE_READ,
 	ESF_EVENT_TYPE_FILE_ACCESS,
 	ESF_EVENT_TYPE_FILE_CLOSED,
+	ESF_EVENT_TYPE_FILE_INODE_CHECK_PERM,
 	__ESF_END_CATEGORY(FILE),
 
 	__ESF_BEGIN_CATEGORY(2, FS),
@@ -182,8 +185,15 @@ typedef struct esf_creds_info {
 	__kernel_gid32_t fsgid;
 } esf_creds_info_t;
 
+typedef struct esf_uuid {
+	__u8 b[__ESF_UUID_LEN];
+} esf_uuid_t;
+
 typedef struct esf_fs_info {
-	char type[32];
+	char id[32];
+	esf_uuid_t uuid;
+	__kernel_ulong_t magic;
+	esf_item_t mount_point;
 } esf_fs_info_t;
 
 typedef struct esf_file_info {
@@ -209,6 +219,7 @@ typedef struct esf_process_info {
 	esf_item_t env;
 	esf_ns_info_t namespace;
 	esf_file_info_t file_info;
+	esf_uuid_t uuid;
 } esf_process_info_t;
 
 typedef struct esf_event_header {
@@ -230,13 +241,18 @@ typedef struct esf_process_exit {
 } esf_process_exit_t;
 
 typedef struct esf_file_open {
-	esf_file_info_t file;
+	esf_file_info_t file; /* esf_file_info_t must be first */
 	__u32 flags;
 } esf_file_open_t;
 
 typedef struct esf_file_truncate {
-	esf_file_info_t file;
+	esf_file_info_t file; /* esf_file_info_t must be first */
 } esf_file_truncate_t;
+
+typedef struct esf_file_inode_check_perm {
+	esf_file_info_t file; /* esf_file_info_t must be first */
+	__kernel_ulong_t mask; /* mask is MAY_* kernel flags */
+} esf_file_inode_check_perm_t;
 
 typedef struct esf_event {
 	esf_event_header_t header;
@@ -246,8 +262,10 @@ typedef struct esf_event {
 		esf_process_execution_t process_execution;
 		esf_process_exit_t process_exit;
 
+		esf_file_info_t __file; /* basic esf_file_* event */
 		esf_file_open_t file_open;
 		esf_file_truncate_t file_truncate;
+		esf_file_inode_check_perm_t file_inode_check_perm;
 	};
 
 	__u64 data_size;

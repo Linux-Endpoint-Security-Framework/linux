@@ -9,8 +9,10 @@
 #include <linux/utsname.h>
 #include <linux/mount.h>
 #include <linux/binfmts.h>
+#include <linux/fs_struct.h>
 
 #include "log.h"
+#include "blobs.h"
 
 void esf_fill_ns_from_task(esf_ns_info_t *ns, struct task_struct *task,
 			   esf_raw_event_filter_data_payload_t *init_filter)
@@ -68,6 +70,9 @@ void esf_fill_process_from_fill_data(
 	BUG_ON(!task_fill_info);
 	BUG_ON(!task_fill_info->task);
 
+	export_uuid(process->uuid.b,
+		    &esf_get_task_lsb(task_fill_info->task)->unique_id);
+
 	struct mm_struct *mm = NULL;
 
 	if (task_fill_info->mm) {
@@ -106,6 +111,11 @@ void esf_fill_process_from_fill_data(
 	}
 
 	if (task_fill_info->exe_info) {
+		if (!task_fill_info->exe_info->fs_info) {
+			task_fill_info->exe_info->fs_info =
+				task_fill_info->task->fs;
+		}
+
 		esf_fill_file_from_fill_data(raw_event, &process->exe,
 					     task_fill_info->exe_info,
 					     init_filter, gfp);
@@ -117,6 +127,9 @@ void esf_fill_process_from_fill_data(
 		if (!path_buffer) {
 			goto fill_integral;
 		}
+
+		exe_info.fs_info = task_fill_info->task->fs;
+		exe_info.inode = file_inode(mm->exe_file);
 
 		char *fpath = file_path(mm->exe_file, path_buffer, PATH_MAX);
 
@@ -135,8 +148,6 @@ void esf_fill_process_from_fill_data(
 						     gfp);
 
 		} else {
-			exe_info.inode = file_inode(mm->exe_file);
-
 			// copy and set size (including NUL terminator)
 			exe_info.filename = kstrdup(fpath, gfp);
 			exe_info.filename_len = strmovelen(fpath);
@@ -171,6 +182,43 @@ fill_integral:
 	if (mm) {
 		mmput(mm);
 	}
+}
+
+typedef struct _lookup_inode_vmfmount_struct {
+	struct inode *inode;
+	struct fs_struct *fs_info;
+	char *buffer;
+	size_t buffer_size;
+	gfp_t gfp;
+
+	char *__will_be_moved found_mount_path;
+} _lookup_inode_vmfmount;
+
+static int _lookup_inode_mount_path(struct vfsmount *mnt, void *arg)
+{
+	_lookup_inode_vmfmount *lookup = arg;
+
+	BUG_ON(!lookup);
+	BUG_ON(!lookup->inode);
+	BUG_ON(!lookup->buffer);
+	BUG_ON(!lookup->fs_info);
+
+	if (!mnt->mnt_root || !mnt->mnt_sb) {
+		return -EFAULT;
+	}
+
+	struct path p = { .dentry = mnt->mnt_root, .mnt = mnt };
+
+	if (lookup->inode->i_sb == mnt->mnt_sb) {
+		char *path = d_absolute_path(&p, lookup->buffer,
+					     lookup->buffer_size);
+
+		lookup->found_mount_path = kstrdup(path, lookup->gfp);
+
+		return true; // stop iterating
+	}
+
+	return false;
 }
 
 void esf_fill_file_from_fill_data(
@@ -234,23 +282,54 @@ skip_path_filling:
 		file->size = file_fill_info->inode->i_size;
 
 		if (file_fill_info->inode->i_sb) {
-			strncpy(file->fs.type,
-				file_fill_info->inode->i_sb->s_id,
-				sizeof(file->fs.type));
+			struct super_block *sb = file_fill_info->inode->i_sb;
+
+			strncpy(file->fs.id, sb->s_id, sizeof(file->fs.id));
+			export_uuid(file->fs.uuid.b, &sb->s_uuid);
+			file->fs.magic = sb->s_magic;
 		}
 	}
 
-	if (file_fill_info->fs_mnt_point) {
-		char *path_buffer = kzalloc(PATH_MAX, gfp);
+	if (file_fill_info->fs_info && file_fill_info->inode) {
+		char *buffer = kmalloc(PATH_MAX, gfp);
 
-		if (path_buffer) {
-			char *path = dentry_path_raw(
-				file_fill_info->fs_mnt_point->mnt_root,
-				path_buffer, PATH_MAX);
-
-			esf_log_debug("--> Mount path: %s", path);
-
-			kfree(path_buffer);
+		if (!buffer) {
+			goto out;
 		}
+
+		_lookup_inode_vmfmount lookup = {
+			.inode = file_fill_info->inode,
+			.fs_info = file_fill_info->fs_info,
+			.buffer = buffer,
+			.buffer_size = PATH_MAX,
+			.gfp = gfp,
+			.found_mount_path = NULL,
+		};
+
+		if (iterate_mounts(_lookup_inode_mount_path, &lookup,
+				   file_fill_info->fs_info->root.mnt)) {
+			if (lookup.found_mount_path) {
+				esf_raw_event_add_item_ex(
+					raw_event, &file->fs.mount_point,
+					ESF_ITEM_TYPE_STRING,
+					lookup.found_mount_path,
+					strmovelen(lookup.found_mount_path),
+					gfp,
+					ESF_ADD_ITEM_KERNMEM |
+						ESF_ADD_ITEM_MOVEMEM);
+			} else {
+				esf_raw_event_add_item_ex(raw_event,
+							  &file->fs.mount_point,
+							  ESF_ITEM_TYPE_STRING,
+							  "?/", sizeof("?/"),
+							  gfp,
+							  ESF_ADD_ITEM_KERNMEM);
+			}
+		}
+
+		kfree(buffer);
 	}
+
+out:
+	return;
 }

@@ -51,7 +51,8 @@ typedef struct esf_file_fill_data {
 	struct inode *inode;
 	char *__will_be_moved filename;
 	size_t filename_len;
-	struct vfsmount *fs_mnt_point;
+
+	struct fs_struct *fs_info;
 } esf_file_fill_data_t;
 
 typedef struct esf_process_fill_data {

@@ -36,28 +36,19 @@
 #define WIN_WIDTH_RES 30
 static int32_t _win_width = 80;
 
-#define ARRAY_SIZE(x) \
-	((sizeof(x) / sizeof(0 [x])) / ((size_t)(!(sizeof(x) % sizeof(0 [x])))))
+#define ARRAY_SIZE(x) ((sizeof(x) / sizeof(0 [x])) / ((size_t)(!(sizeof(x) % sizeof(0 [x])))))
 #define MAX_PW (_win_width - WIN_WIDTH_RES)
 #define NULL_STR "(null)"
 
-#define esf_item_as_string(event_ptr, item_field) \
-	esf_event_item_copy((event_ptr), &((event_ptr)->item_field))
-#define esf_item_as_ref(event_ptr, item_field) \
-	esf_event_item_data((event_ptr), &((event_ptr)->item_field))
+#define esf_item_as_string(event_ptr, item_field) esf_event_item_copy((event_ptr), &((event_ptr)->item_field))
+#define esf_item_as_ref(event_ptr, item_field) esf_event_item_data((event_ptr), &((event_ptr)->item_field))
 
-#define esf_agent_err(fmt, ...)                                   \
-	fprintf(stderr, "[sample]: " fmt ": %s\n", ##__VA_ARGS__, \
-		strerror(errno))
-#define esf_agent_log(fmt, ...) \
-	fprintf(stdout, "[sample]: " fmt "\n", ##__VA_ARGS__)
-#define esf_agent_logn_field_str(name, field, len, ...)         \
-	esf_agent_log("\t" name ": %.*s%s (%d)", MAX_PW, field, \
-		      (len) > MAX_PW ? "..." : "", (len))
-#define esf_agent_log_field_str(name, field, ...)                          \
-	esf_agent_logn_field_str(name, field ? field : NULL_STR,           \
-				 field ? strlen(field) : sizeof(NULL_STR), \
-				 ##__VA_ARGS__)
+#define esf_agent_err(fmt, ...) fprintf(stderr, "[sample]: " fmt ": %s\n", ##__VA_ARGS__, strerror(errno))
+#define esf_agent_log(fmt, ...) fprintf(stdout, "[sample]: " fmt "\n", ##__VA_ARGS__)
+#define esf_agent_logi(ident, fmt, ...) fprintf(stdout, "[sample]: %*s" fmt "\n", ident * 2, "", ##__VA_ARGS__)
+#define esf_agent_logni_field(ident, name, type, field, ...) esf_agent_logi(ident, name ": %" type, field)
+#define esf_agent_logni_field_str(ident, name, field, len, ...) \
+	esf_agent_logi(ident, name ": %.*s%s (%d)", MAX_PW, field, (len) > MAX_PW ? "..." : "", (len))
 
 typedef struct esf_event_iterator {
 	uint32_t _i;
@@ -65,8 +56,7 @@ typedef struct esf_event_iterator {
 	const char *_buffer;
 } esf_event_iterator_t;
 
-static esf_event_iterator_t
-esf_new_event_iterator(const esf_events_t *events_buffer)
+static esf_event_iterator_t esf_new_event_iterator(const esf_events_t *events_buffer)
 {
 	esf_event_iterator_t it = {
 		._i = 0,
@@ -109,10 +99,9 @@ static esf_event_iterator_t esf_event_iterator_next(esf_event_iterator_t it)
 	return it;
 }
 
-#define for_each_esf_event(buff, it)                                 \
-	for (esf_event_iterator_t it =                               \
-		     esf_new_event_iterator(((esf_events_t *)buff)); \
-	     !esf_event_iterator_is_end(it); it = esf_event_iterator_next(it))
+#define for_each_esf_event(buff, it)                                                                                   \
+	for (esf_event_iterator_t it = esf_new_event_iterator(((esf_events_t *)buff)); !esf_event_iterator_is_end(it); \
+	     it = esf_event_iterator_next(it))
 
 typedef struct esf_agent {
 	int fd;
@@ -142,15 +131,11 @@ int esf_register_agent(int esf_fd, esf_agent_t *esf_agent)
 	return 0;
 }
 
-int esf_agent_open_listen_channel(const esf_agent_t *agent,
-				  esf_events_channel_t *chan)
+int esf_agent_open_listen_channel(const esf_agent_t *agent, esf_events_channel_t *chan)
 {
-	esf_agent_ctl_open_listen_channel_t open_listen_chan_cmd = {
-		.api_version = ESF_VERSION
-	};
+	esf_agent_ctl_open_listen_channel_t open_listen_chan_cmd = { .api_version = ESF_VERSION };
 
-	int err = ioctl(agent->fd, ESF_AGENT_CTL_OPEN_LISTEN_CHANNEL,
-			&open_listen_chan_cmd);
+	int err = ioctl(agent->fd, ESF_AGENT_CTL_OPEN_LISTEN_CHANNEL, &open_listen_chan_cmd);
 
 	if (err) {
 		return -1;
@@ -162,15 +147,11 @@ int esf_agent_open_listen_channel(const esf_agent_t *agent,
 	return 0;
 }
 
-int esf_agent_open_auth_channel(const esf_agent_t *agent,
-				esf_events_channel_t *chan)
+int esf_agent_open_auth_channel(const esf_agent_t *agent, esf_events_channel_t *chan)
 {
-	esf_agent_ctl_open_auth_channel_t open_auth_chan_cmd = {
-		.api_version = ESF_VERSION
-	};
+	esf_agent_ctl_open_auth_channel_t open_auth_chan_cmd = { .api_version = ESF_VERSION };
 
-	int err = ioctl(agent->fd, ESF_AGENT_CTL_OPEN_AUTH_CHANNEL,
-			&open_auth_chan_cmd);
+	int err = ioctl(agent->fd, ESF_AGENT_CTL_OPEN_AUTH_CHANNEL, &open_auth_chan_cmd);
 
 	if (err) {
 		return -1;
@@ -182,11 +163,9 @@ int esf_agent_open_auth_channel(const esf_agent_t *agent,
 	return 0;
 }
 
-int esf_event_subscribe(const esf_events_channel_t *chan,
-			esf_event_type_t event_type)
+int esf_event_subscribe(const esf_events_channel_t *chan, esf_event_type_t event_type)
 {
-	esf_agent_log("subscribing to event type %d (chan: %d)...", event_type,
-		      chan->fd);
+	esf_agent_log("subscribing to event type %d (chan: %d)...", event_type, chan->fd);
 	esf_events_chan_ctl_subscribe_t subscribe_cmd = {
 		.event_type = event_type,
 	};
@@ -196,8 +175,7 @@ int esf_event_subscribe(const esf_events_channel_t *chan,
 
 int esf_event_add_filter(esf_events_channel_t *chan, const esf_filter_t *filter)
 {
-	esf_agent_log("adding %s filter (chan: %d)...",
-		      filter->type == ESF_FILTER_TYPE_ALLOW ? "allow" : "drop",
+	esf_agent_log("adding %s filter (chan: %d)...", filter->type == ESF_FILTER_TYPE_ALLOW ? "allow" : "drop",
 		      chan->fd);
 	esf_events_chan_ctl_add_filter_t add_filter_t = {
 		.filter = (esf_filter_t *)filter,
@@ -206,16 +184,14 @@ int esf_event_add_filter(esf_events_channel_t *chan, const esf_filter_t *filter)
 	return ioctl(chan->fd, ESF_EVENTS_CHAN_CTL_ADD_FILTER, &add_filter_t);
 }
 
-void esf_filter_init(esf_filter_t *filter, esf_filter_type_t type,
-		     esf_filter_match_mode_t mode)
+void esf_filter_init(esf_filter_t *filter, esf_filter_type_t type, esf_filter_match_mode_t mode)
 {
 	memset(filter, 0, sizeof(*filter));
 	filter->match_mode = mode;
 	filter->type = type;
 }
 
-int esf_filter_add_rule(esf_filter_t *filter, esf_filter_match_mask_t match,
-			const void *data, size_t data_size)
+int esf_filter_add_rule(esf_filter_t *filter, esf_filter_match_mask_t match, const void *data, size_t data_size)
 {
 #define __STR_CHECK_AND_SET(target, val, size, max) \
 	if (size > max - 1) {                       \
@@ -237,8 +213,7 @@ int esf_filter_add_rule(esf_filter_t *filter, esf_filter_match_mask_t match,
 	case ESF_FILTER_EVENT_TYPE:
 		__VAL_CHECK_AND_SET(filter->event_type, data, data_size);
 	case ESF_FILTER_PROCESS_PATH:
-		__STR_CHECK_AND_SET(filter->process.path, data, data_size,
-				    ESF_FILTER_PATH_MAX);
+		__STR_CHECK_AND_SET(filter->process.path, data, data_size, ESF_FILTER_PATH_MAX);
 	case ESF_FILTER_PROCESS_PID:
 		__VAL_CHECK_AND_SET(filter->process.pid, data, data_size);
 	case ESF_FILTER_PROCESS_TGID:
@@ -248,8 +223,7 @@ int esf_filter_add_rule(esf_filter_t *filter, esf_filter_match_mask_t match,
 	case ESF_FILTER_PROCESS_GID:
 		__VAL_CHECK_AND_SET(filter->process.gid, data, data_size);
 	case ESF_FILTER_TARGET_PATH:
-		__STR_CHECK_AND_SET(filter->target.path, data, data_size,
-				    ESF_FILTER_PATH_MAX);
+		__STR_CHECK_AND_SET(filter->target.path, data, data_size, ESF_FILTER_PATH_MAX);
 	}
 
 	return EINVAL;
@@ -262,21 +236,17 @@ int esf_agent_activate(const esf_agent_t *agent)
 	return ioctl(agent->fd, ESF_AGENT_CTL_ACTIVATE, &activate_cmd);
 }
 
-int esf_event_make_decision(const esf_agent_t *agent, const esf_event_t *event,
-			    esf_action_decision_t decision)
+int esf_event_make_decision(const esf_agent_t *agent, const esf_event_t *event, esf_action_decision_t decision)
 {
 	esf_agent_ctl_decide_t decide_cmd = {
 		.event_id = event->header.id,
 		.decision = decision,
 	};
-	esf_agent_log("%s event %llu",
-		      decision == ESF_ACTION_DECISION_ALLOW ? "allow" : "deny",
-		      event->header.id);
+	esf_agent_log("%s event %llu", decision == ESF_ACTION_DECISION_ALLOW ? "allow" : "deny", event->header.id);
 	return ioctl(agent->fd, ESF_AGENT_CTL_DECIDE, &decide_cmd);
 }
 
-const void *esf_event_item_data(const esf_event_t *event,
-				const esf_item_t *item)
+const void *esf_event_item_data(const esf_event_t *event, const esf_item_t *item)
 {
 	return event->data + item->offset;
 }
@@ -331,19 +301,15 @@ bool _is_program(const char *p, const char *e, uint32_t pathlen)
 	return strcmp(base, e) == 0;
 }
 
-typedef void (*on_event_callback)(const esf_events_channel_t *channel,
-				  const esf_event_t *event, void *data);
+typedef void (*on_event_callback)(const esf_events_channel_t *channel, const esf_event_t *event, void *data);
 
-static int _read_all_events(const esf_events_channel_t *channel,
-			    esf_events_t *events_buffer,
-			    const size_t events_buffer_size,
-			    const on_event_callback callback, void *data)
+static int _read_all_events(const esf_events_channel_t *channel, esf_events_t *events_buffer,
+			    const size_t events_buffer_size, const on_event_callback callback, void *data)
 {
 	int err = 0;
 
 	while (true) {
-		const long bytes_read =
-			read(channel->fd, events_buffer, events_buffer_size);
+		const long bytes_read = read(channel->fd, events_buffer, events_buffer_size);
 
 		if (bytes_read < 0) {
 			err = errno;
@@ -354,14 +320,12 @@ static int _read_all_events(const esf_events_channel_t *channel,
 			goto out;
 		}
 
-		esf_agent_log(
-			"accepted %llu events on events chan %d (read: %ld bytes)",
-			events_buffer->count, channel->fd, bytes_read);
+		esf_agent_log("accepted %llu events on events chan %d (read: %ld bytes)", events_buffer->count,
+			      channel->fd, bytes_read);
 
 		for_each_esf_event(events_buffer, it)
 		{
-			const esf_event_t *event =
-				esf_event_iterator_get_event(it);
+			const esf_event_t *event = esf_event_iterator_get_event(it);
 			callback(channel, event, data);
 		}
 	}
@@ -374,7 +338,16 @@ static bool _print_thread_should_run = true;
 static bool _auth_thread_should_run = true;
 static bool _listen_thread_should_run = true;
 
-void *_print_routine(void *arg)
+typedef char uuid_string[37];
+
+static void _uuid_to_str(uuid_string uuid_str, const esf_uuid_t uuid)
+{
+	sprintf(uuid_str, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x", uuid.b[0], uuid.b[1],
+		uuid.b[2], uuid.b[3], uuid.b[4], uuid.b[5], uuid.b[6], uuid.b[7], uuid.b[8], uuid.b[9], uuid.b[10],
+		uuid.b[11], uuid.b[12], uuid.b[13], uuid.b[14], uuid.b[15]);
+}
+
+static void *_print_routine(void *arg)
 {
 	events_queue_t *print_queue = arg;
 
@@ -389,8 +362,10 @@ void *_print_routine(void *arg)
 		char *parent_exe = esf_item_as_string(event, process.exe.path);
 		char *parent_args = esf_item_as_string(event, process.args);
 		char *parent_env = esf_item_as_string(event, process.env);
-		esf_event_flags_str_t flags =
-			esf_event_flags_str(event->header.flags);
+		uuid_string process_uuid = { 0 };
+		_uuid_to_str(process_uuid, event->process.uuid);
+
+		esf_event_flags_str_t flags = esf_event_flags_str(event->header.flags);
 
 		if (event->header.flags & ESF_EVENT_DENIED) {
 			esf_agent_log(YEL);
@@ -408,44 +383,30 @@ void *_print_routine(void *arg)
 			}
 		}
 
-		esf_agent_log("[%llu] %s:%d [%s], data size: %llu {",
-			      event->header.id,
-			      esf_event_type_name(event->header.type),
-			      event->header.type, flags.str, event->data_size);
+		esf_agent_logi(0, "[%llu] %s:%d [%s], data size: %llu {", event->header.id,
+			       esf_event_type_name(event->header.type), event->header.type, flags.str,
+			       event->data_size);
 
-		esf_agent_log("\tparent { ");
-		esf_agent_logn_field_str("\texe", parent_exe,
-					 event->process.exe.path.size);
-		esf_agent_logn_field_str("\targs", parent_args,
-					 event->process.args.size);
-		esf_agent_logn_field_str("\tenv", parent_env,
-					 event->process.env.size);
-		esf_agent_log("\t}");
+		esf_agent_logi(1, "parent { ");
+		esf_agent_logni_field_str(2, "uuid", process_uuid, (int)sizeof(process_uuid) - 1);
+		esf_agent_logni_field_str(2, "exe", parent_exe, event->process.exe.path.size);
+		esf_agent_logni_field_str(2, "args", parent_args, event->process.args.size);
+		esf_agent_logni_field_str(2, "env", parent_env, event->process.env.size);
+		esf_agent_logi(1, "}");
 
 		if (event->header.type == ESF_EVENT_TYPE_PROCESS_EXECUTION) {
-			char *interpreter = esf_item_as_string(
-				event, process_execution.interpreter);
-			char *child_exe = esf_item_as_string(
-				event, process_execution.process.exe.path);
-			char *child_args = esf_item_as_string(
-				event, process_execution.process.args);
-			char *child_env = esf_item_as_string(
-				event, process_execution.process.env);
+			char *interpreter = esf_item_as_string(event, process_execution.interpreter);
+			char *child_exe = esf_item_as_string(event, process_execution.process.exe.path);
+			char *child_args = esf_item_as_string(event, process_execution.process.args);
+			char *child_env = esf_item_as_string(event, process_execution.process.env);
 
-			esf_agent_log("\tchild { ");
-			esf_agent_logn_field_str(
-				"\tinterpreter", interpreter,
-				event->process_execution.interpreter.size);
-			esf_agent_logn_field_str(
-				"\texe", child_exe,
-				event->process_execution.process.exe.path.size);
-			esf_agent_logn_field_str(
-				"\targs", child_args,
-				event->process_execution.process.args.size);
-			esf_agent_logn_field_str(
-				"\tenv", child_env,
-				event->process_execution.process.env.size);
-			esf_agent_log("\t}");
+			esf_agent_logi(1, "child { ");
+			esf_agent_logni_field_str(2, "interpreter", interpreter,
+						  event->process_execution.interpreter.size);
+			esf_agent_logni_field_str(2, "exe", child_exe, event->process_execution.process.exe.path.size);
+			esf_agent_logni_field_str(2, "args", child_args, event->process_execution.process.args.size);
+			esf_agent_logni_field_str(2, "env", child_env, event->process_execution.process.env.size);
+			esf_agent_logi(1, "}");
 
 			if (interpreter) {
 				free(interpreter);
@@ -461,30 +422,34 @@ void *_print_routine(void *arg)
 			}
 		} else if (ESF_EVENT_IS_IN_CATEGORY(FILE, event->header.type)) {
 			/* all file events has file_info at top of struct */
-			const char *fname =
-				esf_item_as_ref(event, file_open.file.path);
+			const char *fname = esf_item_as_ref(event, file_open.file.path);
+			const char *mnt_point = esf_item_as_ref(event, file_open.file.fs.mount_point);
 
-			esf_agent_log("\tfile { ");
-			esf_agent_log("\t\tfs { ");
-			esf_agent_logn_field_str(
-				"\t\ttype", event->file_open.file.fs.type,
-				(int)sizeof(event->file_open.file.fs.type));
-			esf_agent_log("\t\t}");
-			esf_agent_logn_field_str(
-				"\tpath", fname,
-				event->file_open.file.path.size);
-			esf_agent_log("\t}");
+			uuid_string fs_uuid = { 0 };
+			_uuid_to_str(fs_uuid, event->file_open.file.fs.uuid);
+
+			esf_agent_logi(1, "file { ");
+			esf_agent_logi(2, "fs { ");
+			esf_agent_logni_field(3, "magic", "lx", event->file_open.file.fs.magic);
+			esf_agent_logni_field_str(3, "uuid", fs_uuid, (int)sizeof(fs_uuid) - 1);
+			esf_agent_logni_field_str(3, "mount_point", mnt_point,
+						  event->file_open.file.fs.mount_point.size);
+			esf_agent_logni_field_str(3, "id", event->file_open.file.fs.id,
+						  (int)sizeof(event->file_open.file.fs.id));
+			esf_agent_logi(2, "}");
+			esf_agent_logni_field_str(2, "path", fname, event->file_open.file.path.size);
+			esf_agent_logi(1, "}");
 		}
 
 		switch (decision) {
 		case ESF_ACTION_DECISION_DENY:
-			esf_agent_log("} -> deny" RESET);
+			esf_agent_logi(0, "} -> deny" RESET);
 			break;
 		case ESF_ACTION_DECISION_ALLOW:
-			esf_agent_log("} -> allow" RESET);
+			esf_agent_logi(0, "} -> allow" RESET);
 			break;
 		default:
-			esf_agent_log("}" RESET);
+			esf_agent_logi(0, "}" RESET);
 			break;
 		}
 
@@ -511,20 +476,16 @@ typedef struct {
 	bool *should_run_flag;
 } events_thread_args_t;
 
-void _auth_callback(const esf_events_channel_t *channel,
-		    const esf_event_t *event, void *data)
+void _auth_callback(const esf_events_channel_t *channel, const esf_event_t *event, void *data)
 {
 	esf_action_decision_t decision = ESF_ACTION_DECISION_ALLOW;
 	events_queue_t *print_queue = data;
 
 	if (event->header.flags & ESF_EVENT_CAN_CONTROL) {
 		if (event->header.type == ESF_EVENT_TYPE_PROCESS_EXECUTION) {
-			const char *exe_path = esf_item_as_ref(
-				event, process_execution.interpreter);
+			const char *exe_path = esf_item_as_ref(event, process_execution.interpreter);
 
-			decision = _is_program(exe_path, "python",
-					       event->process_execution
-						       .interpreter.size) ?
+			decision = _is_program(exe_path, "python", event->process_execution.interpreter.size) ?
 					   ESF_ACTION_DECISION_DENY :
 					   ESF_ACTION_DECISION_ALLOW;
 		}
@@ -535,9 +496,8 @@ void _auth_callback(const esf_events_channel_t *channel,
 	events_queue_push_event(print_queue, event, decision);
 }
 
-void _print_callback(
-	__attribute_maybe_unused__ const esf_events_channel_t *channel,
-	const esf_event_t *event, void *data)
+void _print_callback(__attribute_maybe_unused__ const esf_events_channel_t *channel, const esf_event_t *event,
+		     void *data)
 {
 	events_queue_t *print_queue = data;
 	events_queue_push_event(print_queue, event, -1);
@@ -570,8 +530,7 @@ static void *_accept_events_routine(void *arg)
 	chan_poll_event.data.fd = args->chan->fd;
 	chan_poll_event.events = EPOLLIN;
 
-	if (epoll_ctl(polling_fd, EPOLL_CTL_ADD, args->chan->fd,
-		      &chan_poll_event) != 0) {
+	if (epoll_ctl(polling_fd, EPOLL_CTL_ADD, args->chan->fd, &chan_poll_event) != 0) {
 		esf_agent_err("epoll_ctl");
 		err = errno;
 		goto out;
@@ -579,8 +538,7 @@ static void *_accept_events_routine(void *arg)
 
 	while (*args->should_run_flag) {
 		struct epoll_event poll_events[POLL_MAX_EVENTS];
-		const int wait_result = epoll_wait(polling_fd, poll_events,
-						   POLL_MAX_EVENTS, 1000);
+		const int wait_result = epoll_wait(polling_fd, poll_events, POLL_MAX_EVENTS, 1000);
 
 		if (wait_result < 0) {
 			err = errno;
@@ -588,8 +546,7 @@ static void *_accept_events_routine(void *arg)
 		}
 
 		if (wait_result == 0) {
-			esf_agent_log("waiting for new events at channel %d...",
-				      args->chan->fd);
+			esf_agent_log("waiting for new events at channel %d...", args->chan->fd);
 		}
 
 		for (int i = 0; i < wait_result; ++i) {
@@ -599,8 +556,7 @@ static void *_accept_events_routine(void *arg)
 				continue;
 			}
 
-			err = _read_all_events(args->chan, esf_events_buff,
-					       buffer_size, args->callback,
+			err = _read_all_events(args->chan, esf_events_buff, buffer_size, args->callback,
 					       args->print_queue);
 
 			if (err) {
@@ -622,14 +578,11 @@ typedef struct {
 	const char *child;
 } _auth_exec_filter;
 
-static int _init_auth_channel(const esf_agent_t *agent,
-			      esf_events_channel_t *chan)
+static int _init_auth_channel(const esf_agent_t *agent, esf_events_channel_t *chan)
 {
 	int err = esf_agent_open_auth_channel(agent, chan);
 
-	static _auth_exec_filter _auth_exec_filters[] = {
-		{ .parent = "*/bash", .child = "*/ping" }
-	};
+	static _auth_exec_filter _auth_exec_filters[] = { { .parent = "*/bash", .child = "*/ping" } };
 
 	if (err) {
 		esf_agent_err("esf_agent_open_auth_channel");
@@ -646,43 +599,29 @@ static int _init_auth_channel(const esf_agent_t *agent,
 	for (int i = 0; i < ARRAY_SIZE(_auth_exec_filters); i++) {
 		_auth_exec_filter exec_filter = _auth_exec_filters[i];
 		esf_filter_t filter;
-		esf_event_type_t proc_exec_type =
-			ESF_EVENT_TYPE_PROCESS_EXECUTION;
-		esf_filter_init(&filter, ESF_FILTER_TYPE_DROP,
-				ESF_FILTER_MATCH_MODE_AND);
-		esf_filter_add_rule(&filter, ESF_FILTER_EVENT_TYPE,
-				    &proc_exec_type, sizeof(proc_exec_type));
-		esf_filter_add_rule(&filter, ESF_FILTER_PROCESS_PATH,
-				    exec_filter.parent,
-				    strlen(exec_filter.parent));
-		esf_filter_add_rule(&filter, ESF_FILTER_TARGET_PATH,
-				    exec_filter.child,
-				    strlen(exec_filter.child));
+		esf_event_type_t proc_exec_type = ESF_EVENT_TYPE_PROCESS_EXECUTION;
+		esf_filter_init(&filter, ESF_FILTER_TYPE_DROP, ESF_FILTER_MATCH_MODE_AND);
+		esf_filter_add_rule(&filter, ESF_FILTER_EVENT_TYPE, &proc_exec_type, sizeof(proc_exec_type));
+		esf_filter_add_rule(&filter, ESF_FILTER_PROCESS_PATH, exec_filter.parent, strlen(exec_filter.parent));
+		esf_filter_add_rule(&filter, ESF_FILTER_TARGET_PATH, exec_filter.child, strlen(exec_filter.child));
 		err = esf_event_add_filter(chan, &filter);
 
 		if (err) {
-			esf_agent_log(
-				"unable to add filter to chan %d, error: %s",
-				err, strerror(errno));
+			esf_agent_log("unable to add filter to chan %d, error: %s", err, strerror(errno));
 			return err;
 		}
 	}
 
 	esf_filter_t filter;
 	esf_event_type_t proc_exec_type = ESF_EVENT_TYPE_PROCESS_EXECUTION;
-	esf_filter_init(&filter, ESF_FILTER_TYPE_ALLOW,
-			ESF_FILTER_MATCH_MODE_AND);
-	esf_filter_add_rule(&filter, ESF_FILTER_EVENT_TYPE, &proc_exec_type,
-			    sizeof(proc_exec_type));
-	esf_filter_add_rule(&filter, ESF_FILTER_PROCESS_PATH, "/usr/bin/*",
-			    strlen("/usr/bin/*"));
-	esf_filter_add_rule(&filter, ESF_FILTER_TARGET_PATH, "/usr/bin/*",
-			    strlen("/usr/bin/*"));
+	esf_filter_init(&filter, ESF_FILTER_TYPE_ALLOW, ESF_FILTER_MATCH_MODE_AND);
+	esf_filter_add_rule(&filter, ESF_FILTER_EVENT_TYPE, &proc_exec_type, sizeof(proc_exec_type));
+	esf_filter_add_rule(&filter, ESF_FILTER_PROCESS_PATH, "/usr/bin/*", strlen("/usr/bin/*"));
+	esf_filter_add_rule(&filter, ESF_FILTER_TARGET_PATH, "/usr/bin/*", strlen("/usr/bin/*"));
 	err = esf_event_add_filter(chan, &filter);
 
 	if (err) {
-		esf_agent_log("unable to add filter to chan %d, error: %s", err,
-			      strerror(errno));
+		esf_agent_log("unable to add filter to chan %d, error: %s", err, strerror(errno));
 		return err;
 	}
 
@@ -690,8 +629,7 @@ out:
 	return 0;
 }
 
-static int _init_listen_channel(const esf_agent_t *agent,
-				esf_events_channel_t *chan)
+static int _init_listen_channel(const esf_agent_t *agent, esf_events_channel_t *chan)
 {
 	int err = esf_agent_open_listen_channel(agent, chan);
 
@@ -731,8 +669,7 @@ int main(const int argc, const char **argv)
 	signal(SIGINT, _signal_hanlder);
 
 	for (int i = 0; i < argc; ++i) {
-		if (!strcmp(argv[i], "--controller") ||
-		    !strcmp(argv[i], "-c")) {
+		if (!strcmp(argv[i], "--controller") || !strcmp(argv[i], "-c")) {
 			esf_agent_log("running agent as controller");
 			controller = true;
 		}
@@ -792,8 +729,7 @@ int main(const int argc, const char **argv)
 		auth_args.callback = _auth_callback;
 		auth_args.should_run_flag = &_auth_thread_should_run;
 
-		err = pthread_create(&auth_thread, NULL, _accept_events_routine,
-				     &auth_args);
+		err = pthread_create(&auth_thread, NULL, _accept_events_routine, &auth_args);
 
 		if (err) {
 			esf_agent_err("pthread_create");
@@ -820,8 +756,7 @@ int main(const int argc, const char **argv)
 		listen_args.callback = _print_callback;
 		listen_args.should_run_flag = &_listen_thread_should_run;
 
-		err = pthread_create(&listen_thread, NULL,
-				     _accept_events_routine, &listen_args);
+		err = pthread_create(&listen_thread, NULL, _accept_events_routine, &listen_args);
 
 		if (err) {
 			esf_agent_err("pthread_create");

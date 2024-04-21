@@ -18,8 +18,8 @@ static struct security_hook_list _esf_hooks[] __ro_after_init = {
 
 	/* file hooks */
 	LSM_HOOK_INIT(inode_permission, esf_on_check_inode_permission),
-	// LSM_HOOK_INIT(file_open, esf_on_file_open),
-	// LSM_HOOK_INIT(file_truncate, esf_on_file_truncate),
+	LSM_HOOK_INIT(file_open, esf_on_file_open),
+	LSM_HOOK_INIT(file_truncate, esf_on_file_truncate),
 
 	/* fs hooks */
 	// todo: implement
