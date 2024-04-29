@@ -4,9 +4,17 @@
 #include <linux/netlink.h>
 #include <linux/miscdevice.h>
 #include <linux/hashtable.h>
+#include <linux/digsig.h>
+#include <linux/esf.h>
+
+#include <linux/module_signature.h>
+#include <linux/verification.h>
+#include <linux/security.h>
+#include <crypto/public_key.h>
 
 #include <uapi/linux/esf/defs.h>
 #include <uapi/linux/esf/ctl.h>
+#include <linux/key-type.h>
 
 #include "agent.h"
 #include "esf.h"
@@ -280,11 +288,67 @@ int esf_submit_raw_event(esf_raw_event_t *raw_event, gfp_t gfp)
 	return esf_submit_raw_event_ex(raw_event, gfp, ESF_SUBMIT_SIMPLE);
 }
 
-static long _esf_signature_verify(struct task_struct *agent_task)
+static int _esf_signature_verify(struct task_struct *agent_task)
 {
-	// todo: implement signature versification
-	esf_log_warn("Agent signature verification is currently unsupported");
-	return 0;
+	esf_log_warn("Agent signature verification is under development");
+	const unsigned long marker_len = sizeof(MODULE_SIG_STRING) - 1;
+	int err = 0;
+	uint8_t *file_data = NULL;
+	size_t file_len = 0, sig_len = 0;
+
+	struct mm_struct *mm = agent_task->mm;
+
+	if (!mm) {
+		err = -EFAULT;
+		goto out;
+	}
+	ssize_t read = kernel_read_file(mm->exe_file, 0, (void **)&file_data,
+					INT_MAX, &file_len, READING_MODULE);
+
+	if (read < 0) {
+		err = (int)read;
+		goto out;
+	}
+
+	if (file_data == NULL) {
+		err = -EFAULT;
+		goto out;
+	}
+
+	/* We truncate the file data to discard the signature */
+	if (file_len > marker_len &&
+	    memcmp(file_data + file_len - marker_len, MODULE_SIG_STRING,
+		   marker_len) == 0) {
+		file_len -= marker_len;
+	}
+
+	if (file_len <= sizeof(struct module_signature)) {
+		err = -EBADMSG;
+		goto out;
+	}
+
+	struct module_signature *ms =
+		(void *)(file_data + (file_len - sizeof(*ms)));
+
+	err = mod_check_sig(ms, file_len, "ESF agent");
+
+	if (err) {
+		goto out;
+	}
+
+	sig_len = be32_to_cpu(ms->sig_len);
+	file_len -= sig_len + sizeof(*ms);
+
+	err = verify_pkcs7_signature(file_data, file_len, file_data + file_len,
+				     sig_len, VERIFY_USE_SECONDARY_KEYRING,
+				     VERIFYING_MODULE_SIGNATURE, NULL, NULL);
+
+out:
+	if (file_data != NULL) {
+		kvfree(file_data);
+	}
+
+	return err;
 }
 
 int _do_esf_register_agent_ioctl(struct task_struct *agent_task,
@@ -296,8 +360,29 @@ int _do_esf_register_agent_ioctl(struct task_struct *agent_task,
 	err = _esf_signature_verify(agent_task);
 
 	if (err) {
-		goto out;
+		const char *reason = "unknown";
+
+		switch (err) {
+		case -ENODATA:
+			reason = "unsigned agent";
+			break;
+		case -ENOPKG:
+			reason = "agent with unsupported crypto";
+			break;
+		case -ENOKEY:
+			reason = "agent with unavailable key";
+			break;
+		default:
+			break;
+		}
+
+		esf_log_err("Agent signature verification failed, error: %s %d",
+			    reason, err);
+
+		return err;
 	}
+
+	esf_log_info("Signature verified");
 
 	new_agent = esf_agent_create(agent_task, GFP_KERNEL);
 
