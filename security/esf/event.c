@@ -331,7 +331,7 @@ static int _esf_raw_event_wait_for_one_read(esf_raw_event_t *raw_event,
 	uint64_t read_timeout = msecs_to_jiffies(_ESF_EVENT_READ_TIMEOUT_MS);
 
 	uint64_t till_read_timeout = wait_for_completion_interruptible_timeout(
-		&raw_event->decisions_completion, read_timeout);
+		&raw_event->__read_completion, read_timeout);
 
 #ifdef CONFIG_DEBUG_TRACE_LOG_DECISIONS
 	if (till_read_timeout == 0) {

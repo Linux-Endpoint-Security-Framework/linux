@@ -290,7 +290,6 @@ int esf_submit_raw_event(esf_raw_event_t *raw_event, gfp_t gfp)
 
 static int _esf_signature_verify(struct task_struct *agent_task)
 {
-	esf_log_warn("Agent signature verification is under development");
 	const unsigned long marker_len = sizeof(MODULE_SIG_STRING) - 1;
 	int err = 0;
 	uint8_t *file_data = NULL;

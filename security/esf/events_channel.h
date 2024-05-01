@@ -12,10 +12,10 @@ struct esf_events_channel;
 typedef struct esf_events_channel_ctl {
 	void (*on_events_were_read)(struct esf_events_channel *chan,
 				    const esf_events_queue_t *queue);
-	// returns should event been actually sent
+	// tells should event be actually be sent
 	bool (*event_filtered)(struct esf_events_channel *chan,
 			       esf_raw_event_t *event, esf_filter_t *filter);
-	// returns should event been actually sent
+	// tells should event be actually be sent
 	bool (*event_passed_filters)(struct esf_events_channel *chan,
 				     esf_raw_event_t *event,
 				     esf_filter_type_t filters_type,
