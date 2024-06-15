@@ -14,7 +14,9 @@ static struct security_hook_list _esf_hooks[] __ro_after_init = {
 	/* process hooks */
 	LSM_HOOK_INIT(bprm_check_security, _esf_bprm_check_security),
 	// todo: find a better place for this event (maybe with probe on do_exit)
-	//	LSM_HOOK_INIT(task_free, esf_on_process_exited),
+	LSM_HOOK_INIT(task_free, esf_on_process_exited),
+	LSM_HOOK_INIT(task_kill, esf_on_process_kill),
+	LSM_HOOK_INIT(ptrace_access_check, esf_on_process_ptrace),
 
 	/* file hooks */
 	LSM_HOOK_INIT(inode_permission, esf_on_check_inode_permission),

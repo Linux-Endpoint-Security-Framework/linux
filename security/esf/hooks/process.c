@@ -1,5 +1,6 @@
 #include "process.h"
 
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/mman.h>
 #include <linux/mmap_lock.h>
@@ -151,14 +152,14 @@ int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 	parent_task = task->parent ? get_task_struct(task->parent) :
 				     get_task_struct(task);
 
-	esf_process_fill_data_t fill_task_info = { 0 };
+	esf_process_fill_data_t fill_child_task_info = { 0 };
 	esf_file_fill_data_t fill_task_file_info = { 0 };
-	fill_task_info.exe_info = &fill_task_file_info;
+	fill_child_task_info.exe_info = &fill_task_file_info;
 
-	esf_process_fill_data_t fill_header_task_info = { 0 };
+	esf_process_fill_data_t fill_parent_task_info = { 0 };
 
-	fill_task_info.task = task;
-	fill_header_task_info.task = parent_task;
+	fill_child_task_info.task = task;
+	fill_parent_task_info.task = parent_task;
 
 	uint32_t uarr_size = bprm->exec - bprm->p;
 	void *environ_dump = _dump_user_pages(bprm, (void *__user)bprm->p,
@@ -167,11 +168,11 @@ int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 	if (environ_dump) {
 		void *stack_ptr = environ_dump;
 
-		fill_task_info.argp = _get_flat_strings_from_stack(
-			&stack_ptr, bprm->argc, &fill_task_info.arg_len);
+		fill_child_task_info.argp = _get_flat_strings_from_stack(
+			&stack_ptr, bprm->argc, &fill_child_task_info.arg_len);
 
-		fill_task_info.envp = _get_flat_strings_from_stack(
-			&stack_ptr, bprm->envc, &fill_task_info.env_len);
+		fill_child_task_info.envp = _get_flat_strings_from_stack(
+			&stack_ptr, bprm->envc, &fill_child_task_info.env_len);
 
 		kfree(environ_dump);
 	}
@@ -186,22 +187,24 @@ int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm)
 		inode_to_exec = file_inode(bprm->file);
 	}
 
-	fill_task_info.exe_info->inode = inode_to_exec;
-	fill_task_info.exe_info->filename = kstrdup(bprm->filename, GFP_KERNEL);
-	fill_task_info.exe_info->filename_len =
+	fill_child_task_info.exe_info->inode = inode_to_exec;
+	fill_child_task_info.exe_info->filename =
+		kstrdup(bprm->filename, GFP_KERNEL);
+	fill_child_task_info.exe_info->filename_len =
 		bprm->filename ? strmovelen(bprm->filename) : 0;
 	fdput(file_to_exec);
 
 	// fill header with parent information
 	esf_fill_process_from_fill_data(raw_event, &raw_event->event.process,
-					&fill_header_task_info,
+					&fill_parent_task_info,
 					&raw_event->filter_data.process,
 					GFP_KERNEL);
 
 	// fill event payload process
 	esf_fill_process_from_fill_data(
 		raw_event, &raw_event->event.process_execution.process,
-		&fill_task_info, &raw_event->filter_data.target, GFP_KERNEL);
+		&fill_child_task_info, &raw_event->filter_data.target,
+		GFP_KERNEL);
 
 	if (bprm->interp) {
 		esf_raw_event_add_item(
@@ -231,14 +234,117 @@ out:
 	return ret;
 }
 
+int esf_on_process_ptrace(struct task_struct *p, unsigned int mode)
+{
+	int ret = 0;
+	esf_raw_event_t *raw_event = NULL;
+
+	if (!esf_anyone_subscribed_to(ESF_EVENT_TYPE_PROCESS_TRACE)) {
+		goto out;
+	}
+
+	raw_event = esf_raw_event_create(
+		ESF_EVENT_TYPE_PROCESS_TRACE,
+		ESF_EVENT_SIMPLE | ESF_EVENT_CAN_CONTROL, GFP_KERNEL);
+
+	if (!raw_event) {
+		goto out;
+	}
+
+	esf_process_fill_data_t fill_sender_task_info = { 0 };
+	fill_sender_task_info.task = current;
+
+	esf_fill_process_from_fill_data(raw_event, &raw_event->event.process,
+					&fill_sender_task_info,
+					&raw_event->filter_data.process,
+					GFP_KERNEL);
+
+	esf_process_fill_data_t fill_receiver_task_info = { 0 };
+	fill_receiver_task_info.task = p;
+
+	esf_fill_process_from_fill_data(raw_event,
+					&raw_event->event.process_ptrace.target,
+					&fill_receiver_task_info,
+					&raw_event->filter_data.target,
+					GFP_KERNEL);
+
+	raw_event->event.process_ptrace.mode = mode;
+
+	ret = esf_submit_raw_event_ex(raw_event, GFP_KERNEL,
+				      ESF_SUBMIT_WAIT_FOR_DECISION);
+
+out:
+	if (raw_event) {
+		esf_raw_event_put(raw_event);
+	}
+
+	return ret;
+}
+
+int esf_on_process_kill(struct task_struct *p, struct kernel_siginfo *info,
+			int sig, const struct cred *cred)
+{
+	int ret = 0;
+	esf_raw_event_t *raw_event = NULL;
+
+	if (!esf_anyone_subscribed_to(ESF_EVENT_TYPE_PROCESS_SIGNAL)) {
+		goto out;
+	}
+
+	raw_event = esf_raw_event_create(
+		ESF_EVENT_TYPE_PROCESS_SIGNAL,
+		ESF_EVENT_SIMPLE | ESF_EVENT_CAN_CONTROL, GFP_KERNEL);
+
+	if (!raw_event) {
+		goto out;
+	}
+
+	esf_process_fill_data_t fill_sender_task_info = { 0 };
+	fill_sender_task_info.task = current;
+
+	esf_fill_process_from_fill_data(raw_event, &raw_event->event.process,
+					&fill_sender_task_info,
+					&raw_event->filter_data.process,
+					GFP_KERNEL);
+
+	esf_process_fill_data_t fill_receiver_task_info = { 0 };
+	fill_receiver_task_info.task = p;
+
+	esf_fill_process_from_fill_data(raw_event,
+					&raw_event->event.process_signal.target,
+					&fill_receiver_task_info,
+					&raw_event->filter_data.target,
+					GFP_KERNEL);
+
+	raw_event->event.process_signal.signal = sig;
+
+	ret = esf_submit_raw_event_ex(raw_event, GFP_KERNEL,
+				      ESF_SUBMIT_WAIT_FOR_DECISION);
+
+out:
+	if (raw_event) {
+		esf_raw_event_put(raw_event);
+	}
+
+	return ret;
+}
+
 void esf_on_process_exited(struct task_struct *task)
 {
+	if (task->pid != task->tgid) {
+		return;
+	}
+
 	if (!esf_anyone_subscribed_to(ESF_EVENT_TYPE_PROCESS_EXITED)) {
 		return;
 	}
 
 	esf_raw_event_t *raw_event = esf_raw_event_create(
 		ESF_EVENT_TYPE_PROCESS_EXITED, ESF_EVENT_SIMPLE, GFP_KERNEL);
+
+	if (!raw_event) {
+		return;
+	}
 
 	esf_process_fill_data_t fill_task_info = { 0 };
 	fill_task_info.task = task;

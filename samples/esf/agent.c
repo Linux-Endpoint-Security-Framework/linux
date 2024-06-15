@@ -387,7 +387,8 @@ static void *_print_routine(void *arg)
 			       esf_event_type_name(event->header.type), event->header.type, flags.str,
 			       event->data_size);
 
-		esf_agent_logi(1, "parent { ");
+		esf_agent_logi(1, "process { ");
+		esf_agent_logni_field(2, "pid", "d", event->process.pid);
 		esf_agent_logni_field_str(2, "uuid", process_uuid, (int)sizeof(process_uuid) - 1);
 		esf_agent_logni_field_str(2, "exe", parent_exe, event->process.exe.path.size);
 		esf_agent_logni_field_str(2, "args", parent_args, event->process.args.size);
@@ -395,6 +396,8 @@ static void *_print_routine(void *arg)
 		esf_agent_logi(1, "}");
 
 		if (event->header.type == ESF_EVENT_TYPE_PROCESS_EXECUTION) {
+			_uuid_to_str(process_uuid, event->process_execution.process.uuid);
+
 			char *interpreter = esf_item_as_string(event, process_execution.interpreter);
 			char *child_exe = esf_item_as_string(event, process_execution.process.exe.path);
 			char *child_args = esf_item_as_string(event, process_execution.process.args);
@@ -403,6 +406,9 @@ static void *_print_routine(void *arg)
 			esf_agent_logi(1, "child { ");
 			esf_agent_logni_field_str(2, "interpreter", interpreter,
 						  event->process_execution.interpreter.size);
+			esf_agent_logni_field(2, "pid", "d", event->process_execution.process.pid);
+			esf_agent_logni_field(2, "ppid", "d", event->process_execution.process.ppid);
+			esf_agent_logni_field_str(2, "uuid", process_uuid, (int)sizeof(process_uuid) - 1);
 			esf_agent_logni_field_str(2, "exe", child_exe, event->process_execution.process.exe.path.size);
 			esf_agent_logni_field_str(2, "args", child_args, event->process_execution.process.args.size);
 			esf_agent_logni_field_str(2, "env", child_env, event->process_execution.process.env.size);
@@ -411,6 +417,58 @@ static void *_print_routine(void *arg)
 			if (interpreter) {
 				free(interpreter);
 			}
+			if (child_exe) {
+				free(child_exe);
+			}
+			if (child_args) {
+				free(child_args);
+			}
+			if (child_env) {
+				free(child_env);
+			}
+		} else if (event->header.type == ESF_EVENT_TYPE_PROCESS_SIGNAL) {
+			_uuid_to_str(process_uuid, event->process_signal.target.uuid);
+
+			char *child_exe = esf_item_as_string(event, process_signal.target.exe.path);
+			char *child_args = esf_item_as_string(event, process_signal.target.args);
+			char *child_env = esf_item_as_string(event, process_signal.target.env);
+
+			esf_agent_logi(1, "child { ");
+			esf_agent_logni_field(2, "pid", "d", event->process_signal.target.pid);
+			esf_agent_logni_field(2, "ppid", "d", event->process_signal.target.ppid);
+			esf_agent_logni_field_str(2, "uuid", process_uuid, (int)sizeof(process_uuid) - 1);
+			esf_agent_logni_field_str(2, "exe", child_exe, event->process_signal.target.exe.path.size);
+			esf_agent_logni_field_str(2, "args", child_args, event->process_signal.target.args.size);
+			esf_agent_logni_field_str(2, "env", child_env, event->process_signal.target.env.size);
+			esf_agent_logi(1, "}");
+			esf_agent_logni_field(1, "signal", "d", event->process_signal.signal);
+
+			if (child_exe) {
+				free(child_exe);
+			}
+			if (child_args) {
+				free(child_args);
+			}
+			if (child_env) {
+				free(child_env);
+			}
+		} else if (event->header.type == ESF_EVENT_TYPE_PROCESS_TRACE) {
+			_uuid_to_str(process_uuid, event->process_ptrace.target.uuid);
+
+			char *child_exe = esf_item_as_string(event, process_ptrace.target.exe.path);
+			char *child_args = esf_item_as_string(event, process_ptrace.target.args);
+			char *child_env = esf_item_as_string(event, process_ptrace.target.env);
+
+			esf_agent_logi(1, "child { ");
+			esf_agent_logni_field(2, "pid", "d", event->process_ptrace.target.pid);
+			esf_agent_logni_field(2, "ppid", "d", event->process_ptrace.target.ppid);
+			esf_agent_logni_field_str(2, "uuid", process_uuid, (int)sizeof(process_uuid) - 1);
+			esf_agent_logni_field_str(2, "exe", child_exe, event->process_ptrace.target.exe.path.size);
+			esf_agent_logni_field_str(2, "args", child_args, event->process_ptrace.target.args.size);
+			esf_agent_logni_field_str(2, "env", child_env, event->process_ptrace.target.env.size);
+			esf_agent_logi(1, "}");
+			esf_agent_logni_field(1, "mode", "d", event->process_ptrace.mode);
+
 			if (child_exe) {
 				free(child_exe);
 			}
@@ -639,7 +697,11 @@ static int _init_listen_channel(const esf_agent_t *agent, esf_events_channel_t *
 	}
 
 	err = esf_event_subscribe(chan, ESF_EVENT_TYPE_PROCESS_EXECUTION);
-	err |= esf_event_subscribe(chan, ESF_EVENT_TYPE_FILE_OPEN);
+	err |= esf_event_subscribe(chan, ESF_EVENT_TYPE_PROCESS_EXITED);
+	err |= esf_event_subscribe(chan, ESF_EVENT_TYPE_PROCESS_TRACE);
+	err |= esf_event_subscribe(chan, ESF_EVENT_TYPE_PROCESS_SIGNAL);
+
+	// err |= esf_event_subscribe(chan, ESF_EVENT_TYPE_FILE_OPEN);
 
 	if (err) {
 		esf_agent_err("esf_event_subscribe");
@@ -773,12 +835,12 @@ int main(const int argc, const char **argv)
 	}
 
 out_join:
-	if (controller) {
+	if (controller && auth_thread) {
 		pthread_join(auth_thread, NULL);
 		close(auth_chan.fd);
 	}
 
-	if (listener) {
+	if (listener && listen_thread) {
 		pthread_join(listen_thread, NULL);
 		close(listen_chan.fd);
 	}

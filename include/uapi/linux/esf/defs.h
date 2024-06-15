@@ -240,6 +240,16 @@ typedef struct esf_process_exit {
 	int code;
 } esf_process_exit_t;
 
+typedef struct esf_process_signal {
+	esf_process_info_t target;
+	int signal;
+} esf_process_signal_t;
+
+typedef struct esf_process_ptrace {
+	esf_process_info_t target;
+	__u32 mode;
+} esf_process_ptrace_t;
+
 typedef struct esf_file_open {
 	esf_file_info_t file; /* esf_file_info_t must be first */
 	__u32 flags;
@@ -261,6 +271,8 @@ typedef struct esf_event {
 	union {
 		esf_process_execution_t process_execution;
 		esf_process_exit_t process_exit;
+		esf_process_signal_t process_signal;
+		esf_process_ptrace_t process_ptrace;
 
 		esf_file_info_t __file; /* basic esf_file_* event */
 		esf_file_open_t file_open;

@@ -5,6 +5,11 @@
 #include <linux/binfmts.h>
 #include <linux/uuid.h>
 
+int esf_on_process_ptrace(struct task_struct *p, unsigned int mode);
+
+int esf_on_process_kill(struct task_struct *p, struct kernel_siginfo *info,
+			int sig, const struct cred *cred);
+
 int esf_on_process_exec(struct task_struct *task, struct linux_binprm *bprm);
 
 void esf_on_process_exited(struct task_struct *task);

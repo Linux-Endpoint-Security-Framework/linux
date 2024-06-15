@@ -79,7 +79,10 @@ void esf_fill_process_from_fill_data(
 		mmget(task_fill_info->mm);
 		mm = task_fill_info->mm;
 	} else {
-		mm = get_task_mm(task_fill_info->task);
+		mm = task_fill_info->task->mm;
+		if (mm) {
+			mmget(mm);
+		}
 	}
 
 	if (!IS_ERR_OR_NULL(task_fill_info->argp)) {
@@ -173,6 +176,9 @@ void esf_fill_process_from_fill_data(
 fill_integral:
 	process->pid = task_fill_info->task->pid;
 	process->tgid = task_fill_info->task->tgid;
+	process->ppid = task_fill_info->task->parent ?
+				task_fill_info->task->parent->pid :
+				0;
 
 	esf_fill_creds_from_task(&process->creds, task_fill_info->task,
 				 init_filter);
